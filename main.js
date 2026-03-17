@@ -7,8 +7,6 @@ const fs = require('fs');
 const os = require('os');
 const { autoUpdater } = require('electron-updater');
 
-const LOCALHOST = '127.0.0.1';
-
 let mainWindow;
 
 /* ── Auto-Update (OTA) ─────────────────────────────────────── */
@@ -121,7 +119,7 @@ function daemonRpcLocal(port, method, params) {
   return new Promise((resolve, reject) => {
     const body = JSON.stringify({ jsonrpc: '2.0', id: '0', method, params: params || {} });
     const opts = {
-      hostname: LOCALHOST, port, path: '/json_rpc', method: 'POST',
+      hostname: '127.0.0.1', port, path: '/json_rpc', method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
     };
     const req = http.request(opts, (res) => {
@@ -142,7 +140,7 @@ function daemonRestLocal(port, urlPath, body) {
   return new Promise((resolve, reject) => {
     const data = body ? JSON.stringify(body) : '';
     const opts = {
-      hostname: LOCALHOST, port, path: urlPath,
+      hostname: '127.0.0.1', port, path: urlPath,
       method: body ? 'POST' : 'GET',
       headers: body ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) } : {},
     };
@@ -172,7 +170,7 @@ ipcMain.handle('local-node-start', async (event, { rpcPort = 17750, p2pPort = 17
   const dataDir = getDataDir();
   const args = [
     '--data-dir', path.join(dataDir, 'blockchain'),
-    '--rpc-bind-ip', LOCALHOST,
+    '--rpc-bind-ip', '127.0.0.1',
     '--rpc-bind-port', String(rpcPort),
     '--p2p-bind-port', String(p2pPort),
     '--confirm-external-bind',
@@ -400,7 +398,7 @@ ipcMain.handle('local-node-setup', async (event, { seedNodes = [] } = {}) => {
     } else {
       const args = [
         '--data-dir', blockchainDir,
-        '--rpc-bind-ip', LOCALHOST,
+        '--rpc-bind-ip', '127.0.0.1',
         '--rpc-bind-port', '17750',
         '--p2p-bind-port', '17749',
         '--confirm-external-bind',
@@ -475,9 +473,9 @@ ipcMain.handle('local-wallet-rpc-start', async (event, { daemonPort = 17750, wal
   if (!fs.existsSync(walletDir)) fs.mkdirSync(walletDir, { recursive: true });
 
   const args = [
-    '--daemon-address', LOCALHOST + ':' + daemonPort,
+    '--daemon-address', '127.0.0.1:' + daemonPort,
     '--rpc-bind-port', String(walletRpcPort),
-    '--rpc-bind-ip', LOCALHOST,
+    '--rpc-bind-ip', '127.0.0.1',
     '--disable-rpc-login',
     '--wallet-dir', walletDir,
     '--log-level', '1',
@@ -674,7 +672,7 @@ app.on('activate', () => { if (mainWindow === null) createWindow(); });
 
 ipcMain.handle('get-app-version', () => app.getVersion());
 
-// Proxy wallet RPC from main process so renderer (file://) can reach the local RPC without CORS.
+// Proxy wallet RPC from main process so renderer (file://) can reach http://127.0.0.1 without CORS.
 // Retry on ECONNRESET / connection errors (local nodes only; wallet RPC can drop under load).
 const RPC_MAX_ATTEMPTS = 3;
 const RPC_RETRY_DELAY_MS = 2000;
@@ -692,7 +690,7 @@ function attemptWalletRpc(url, method, params, timeoutMs) {
     const reqUrl = baseUrl + '/json_rpc';
     const u = new URL(reqUrl);
     const isHttps = u.protocol === 'https:';
-    const isRemote = u.hostname !== LOCALHOST && u.hostname !== 'localhost' && u.hostname !== '::1';
+    const isRemote = u.hostname !== '127.0.0.1' && u.hostname !== 'localhost' && u.hostname !== '::1';
     const body = JSON.stringify({ jsonrpc: '2.0', id: '0', method, params });
     const headers = { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) };
 
@@ -809,7 +807,7 @@ function destroyRemoteSession(baseUrl) {
 
 ipcMain.handle('wallet-rpc', async (event, { url, method, params = {}, timeoutMs = 30000 }) => {
   const u = (() => { try { return new URL(url); } catch (_) { return null; } })();
-  const isRemote = u && u.hostname !== LOCALHOST && u.hostname !== 'localhost' && u.hostname !== '::1';
+  const isRemote = u && u.hostname !== '127.0.0.1' && u.hostname !== 'localhost' && u.hostname !== '::1';
   const hint = isRemote
     ? ' Check your internet connection or try refreshing.'
     : ' Run USDmd (17750) and ./start-wallet-rpc.sh (27750) locally.';

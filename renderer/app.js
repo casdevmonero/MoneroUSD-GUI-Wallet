@@ -15,12 +15,12 @@
   // Both browser and desktop default to relay. Desktop users can switch to local node.
   const RELAY_RPC_URL = isBrowser ? (window.location.origin || 'https://monerousd.org') : 'https://monerousd.org';
   const RELAY_DAEMON_URL = isBrowser ? (window.location.origin || 'https://monerousd.org') : 'https://monerousd.org';
-  const LOCAL_RPC_URL = 'http://localhost:27750';
-  const LOCAL_DAEMON_URL = 'http://localhost:17750';
+  const LOCAL_RPC_URL = 'http://127.0.0.1:27750';
+  const LOCAL_DAEMON_URL = 'http://127.0.0.1:17750';
   const DEFAULT_RPC = RELAY_RPC_URL;
   const DEFAULT_DAEMON_URL = RELAY_DAEMON_URL;
   const DEFAULT_SWAP_BACKEND = 'https://swap.monerousd.org';
-  const LEGACY_SWAP_BACKEND = 'http://localhost:8787';
+  const LEGACY_SWAP_BACKEND = 'http://127.0.0.1:8787';
   const DEFAULT_EXPLORER_URL = 'https://explorer.monerousd.org';
   const BTC_RESERVE_ADDRESS = 'bc1qukurxzulh6h356ctnqudqz5kfna5g6ehrcqhn4';
   const XMR_RESERVE_ADDRESS = '49W1wHiiYPsSneF6f1umpJ2Gqgwx7xwVP6KH27Q7p5B8jXHVe8CgwDBEALHSMK9BREK3EqExsLXzmehzsJqGbHHw5XXHCwa';
@@ -266,10 +266,10 @@
     // Desktop: migrate old localhost defaults to relay; preserve intentional custom URLs
     const storedRpc = storageGet(RPC_STORAGE_KEY) || '';
     const storedDaemon = storageGet(DAEMON_URL_STORAGE_KEY) || '';
-    if (!storedRpc || storedRpc === 'http://localhost:27750') {
+    if (!storedRpc || storedRpc === 'http://127.0.0.1:27750') {
       storageSet(RPC_STORAGE_KEY, DEFAULT_RPC);
     }
-    if (!storedDaemon || storedDaemon === 'http://localhost:17750') {
+    if (!storedDaemon || storedDaemon === 'http://127.0.0.1:17750') {
       storageSet(DAEMON_URL_STORAGE_KEY, DEFAULT_DAEMON_URL);
     }
   }
@@ -3324,7 +3324,7 @@
           if (daemonEl) daemonEl.value = RELAY_DAEMON_URL;
         } else {
           // When toggling on, show empty fields so user can enter their own node details.
-          // Do NOT auto-fill with localhost — user must explicitly enter their node URL.
+          // Do NOT auto-fill with 127.0.0.1 — user must explicitly enter their node URL.
           const rpcEl = document.getElementById('rpcUrl');
           const daemonEl = document.getElementById('daemonUrl');
           if (rpcEl) { rpcEl.value = ''; rpcEl.placeholder = 'e.g. http://192.0.2.1:27750'; }

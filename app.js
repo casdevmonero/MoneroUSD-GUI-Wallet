@@ -4,10 +4,10 @@
   const DAEMON_URL_STORAGE_KEY = 'monerousd_daemon_url';
   const SWAP_BACKEND_STORAGE_KEY = 'monerousd_swap_backend_url';
   const isBrowser = typeof window !== 'undefined' && !window.electronAPI;
-  const DEFAULT_RPC = 'http://localhost:27750';
+  const DEFAULT_RPC = 'http://127.0.0.1:27750';
   // Same node as CLI: Haven RPC_DEFAULT_PORT = 17750 (cryptonote_config.h). GUI connects wallet RPC to this daemon via set_daemon.
-  const DEFAULT_DAEMON_URL = 'http://localhost:17750';
-  const DEFAULT_SWAP_BACKEND = 'http://localhost:8787';
+  const DEFAULT_DAEMON_URL = 'http://127.0.0.1:17750';
+  const DEFAULT_SWAP_BACKEND = 'http://127.0.0.1:8787';
   // Dashboard balance: USDm only. Never use XUSD or other assets for balance.
   const ASSET_USDM = 'USDm';
   // 1.0 USDm = 1e8 atomic units (8 decimal places, CRYPTONOTE_DISPLAY_DECIMAL_POINT = 8).
@@ -326,9 +326,9 @@
 
   async function swapFetch(path, options = {}) {
     let base = getSwapBackendUrl().replace(/\/$/, '');
-    // When in browser and backend is default (localhost:8787), use same-origin so server proxy works
+    // When in browser and backend is default (127.0.0.1:8787), use same-origin so server proxy works
     const isBrowser = typeof window !== 'undefined' && !window.electronAPI;
-    if (isBrowser && (!base || base === DEFAULT_SWAP_BACKEND || base.includes('localhost:8787'))) {
+    if (isBrowser && (!base || base === DEFAULT_SWAP_BACKEND || base.includes('127.0.0.1:8787'))) {
       base = (window.location.origin || '').replace(/\/$/, '');
     }
     const url = base + path;

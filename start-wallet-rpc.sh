@@ -3,7 +3,7 @@
 # Configured like Monero: --daemon-address and --trusted-daemon. The app then calls set_daemon,
 # enables auto_refresh (periodic blockchain sync), and runs refresh so balance updates correctly.
 # If you get "Address already in use", run: USDM_WALLET_RPC_PORT=27751 ./start-wallet-rpc.sh
-# Then set Settings → Wallet RPC URL to http://localhost:27751
+# Then set Settings → Wallet RPC URL to http://127.0.0.1:27751
 
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -14,7 +14,7 @@ RPC_PORT="${USDM_WALLET_RPC_PORT:-27750}"
 # Where to create/store wallet files (for Import, use a directory; no --wallet-file)
 WALLET_DIR="${USDM_WALLET_DIR:-$SCRIPT_DIR/wallet-data}"
 # Local USDm daemon (USDmd from MoneroUSD-main). Same as Monero: wallet needs daemon for sync/balance.
-DAEMON_ADDRESS="${USDM_DAEMON_ADDRESS:-http://localhost:17750}"
+DAEMON_ADDRESS="${USDM_DAEMON_ADDRESS:-http://127.0.0.1:17750}"
 
 # Find Monero USD wallet RPC binary (USDm-wallet-rpc from MoneroUSD-main build)
 MONEROUSD_WALLET_RPC="${USDM_WALLET_RPC:-}"
@@ -40,7 +40,7 @@ mkdir -p "$WALLET_DIR"
 echo "Monero USD wallet RPC"
 echo "Wallet dir: $WALLET_DIR"
 echo "Daemon:     $DAEMON_ADDRESS"
-echo "RPC:        http://localhost:$RPC_PORT"
+echo "RPC:        http://127.0.0.1:$RPC_PORT"
 echo ""
 exec "$MONEROUSD_WALLET_RPC" \
   --rpc-bind-port="$RPC_PORT" \

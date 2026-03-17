@@ -10,7 +10,7 @@ Desktop frontend for the Monero USD (USDm) CLI wallet. Uses **Monero logo colors
 - **Swap** – XMR↔USDm quotes and CLI instructions (swap executed via CLI)
 - **History** – Transaction list from wallet RPC
 - **Import** – Restore a wallet from your 25-word seed phrase (private; seed is never stored or logged)
-- **Settings** – Wallet RPC URL (default `http://localhost:27750`)
+- **Settings** – Wallet RPC URL (default `http://127.0.0.1:27750`)
 
 ## Prerequisites
 
@@ -30,15 +30,15 @@ Desktop frontend for the Monero USD (USDm) CLI wallet. Uses **Monero logo colors
 **Haven Protocol's public nodes are no longer available** (project shut down Dec 2024). To sync and see balances you must run your own **Haven daemon** (from `haven-main`) or use a community node.
 
 1. **Run a Haven daemon** (in a separate terminal), e.g. from your build dir: `./haven daemon` (listens on port **17750**).
-2. **Start the wallet RPC** with that daemon: `HAVEN_DAEMON_ADDRESS=http://localhost:17750 ./start-wallet-rpc.sh`
-3. In the app **Settings**, set **Daemon URL** to the same address (e.g. `http://localhost:17750`) and click **Save & connect**.
+2. **Start the wallet RPC** with that daemon: `HAVEN_DAEMON_ADDRESS=http://127.0.0.1:17750 ./start-wallet-rpc.sh`
+3. In the app **Settings**, set **Daemon URL** to the same address (e.g. `http://127.0.0.1:17750`) and click **Save & connect**.
 
 ### "Wallet RPC unreachable" / ECONNRESET / "Address already in use"
 
 **Local nodes only** — there are no public Haven nodes. You must run **havend** (daemon, port 17750) and **haven-wallet-rpc** (port 27750) on your machine.
 
-- **"Address already in use"** when running `./start-wallet-rpc.sh` means **haven-wallet-rpc is already running**. You don’t need to start it again — open the app, set **Settings → Wallet RPC URL** to `http://localhost:27750`, and use the app. To restart the wallet RPC: `pkill -f haven-wallet-rpc`, then run `HAVEN_DAEMON_ADDRESS=http://localhost:17750 ./start-wallet-rpc.sh` again.
-- If you see "Wallet RPC unreachable" or "read ECONNRESET", the app retries automatically. Ensure both daemon and wallet RPC are running. If port 27750 is in use by something else, run `HAVEN_WALLET_RPC_PORT=27751 ./start-wallet-rpc.sh` and set **Settings → Wallet RPC URL** to `http://localhost:27751`.
+- **"Address already in use"** when running `./start-wallet-rpc.sh` means **haven-wallet-rpc is already running**. You don’t need to start it again — open the app, set **Settings → Wallet RPC URL** to `http://127.0.0.1:27750`, and use the app. To restart the wallet RPC: `pkill -f haven-wallet-rpc`, then run `HAVEN_DAEMON_ADDRESS=http://127.0.0.1:17750 ./start-wallet-rpc.sh` again.
+- If you see "Wallet RPC unreachable" or "read ECONNRESET", the app retries automatically. Ensure both daemon and wallet RPC are running. If port 27750 is in use by something else, run `HAVEN_WALLET_RPC_PORT=27751 ./start-wallet-rpc.sh` and set **Settings → Wallet RPC URL** to `http://127.0.0.1:27751`.
 
 1. **Build** the wallet RPC from `haven-main` (if you haven’t):
    ```bash
@@ -53,9 +53,9 @@ Desktop frontend for the Monero USD (USDm) CLI wallet. Uses **Monero logo colors
    ```bash
    cd monerousd-desktop
    chmod +x start-wallet-rpc.sh
-   HAVEN_DAEMON_ADDRESS=http://localhost:17750 ./start-wallet-rpc.sh
+   HAVEN_DAEMON_ADDRESS=http://127.0.0.1:17750 ./start-wallet-rpc.sh
    ```
-   If 27750 is in use: `HAVEN_WALLET_RPC_PORT=27751 ./start-wallet-rpc.sh` and set the app URL to `http://localhost:27751`.
+   If 27750 is in use: `HAVEN_WALLET_RPC_PORT=27751 ./start-wallet-rpc.sh` and set the app URL to `http://127.0.0.1:27751`.
 
    **Option B – Manual:**
    ```bash
@@ -65,7 +65,7 @@ Desktop frontend for the Monero USD (USDm) CLI wallet. Uses **Monero logo colors
    ```
    Use `--rpc-bind-port=27751` if 27750 is in use, and set the app’s Wallet RPC URL accordingly.
 
-3. In the app **Settings**, set **Daemon URL** (e.g. `http://localhost:17750`) and **Wallet RPC URL**, then **Save & connect**.
+3. In the app **Settings**, set **Daemon URL** (e.g. `http://127.0.0.1:17750`) and **Wallet RPC URL**, then **Save & connect**.
 
 ## Run the desktop app (Electron)
 
@@ -75,7 +75,7 @@ npm install
 npm start
 ```
 
-In the app: open **Settings**, set the RPC URL if needed (e.g. `http://localhost:27750`), click **Save & connect**. Then use Dashboard, Send, Receive, Swap, and History.
+In the app: open **Settings**, set the RPC URL if needed (e.g. `http://127.0.0.1:27750`), click **Save & connect**. Then use Dashboard, Send, Receive, Swap, and History.
 
 ### CLI shows balance but app shows 0.00
 
@@ -113,7 +113,7 @@ cd monerousd-desktop
 node server.js
 ```
 
-Then open **http://localhost:3000** in your browser. The server proxies RPC to the URL in Settings (default `http://localhost:27750`).
+Then open **http://localhost:3000** in your browser. The server proxies RPC to the URL in Settings (default `http://127.0.0.1:27750`).
 
 **Browser console:** If you see `[PHANTOM]` or "Receiving end does not exist" / "Could not establish connection" in the dev console, those messages come from a **browser extension** (e.g. Phantom wallet) injecting into the page. They are harmless for this app and can be ignored, or disable the extension for localhost.
 
@@ -121,7 +121,7 @@ To use a different wallet RPC port without changing Settings, set the env when s
 
 ```bash
 cd monerousd-desktop
-WALLET_RPC_URL=http://localhost:27750 node server.js
+WALLET_RPC_URL=http://127.0.0.1:27750 node server.js
 ```
 
 ## Swap (XMR ↔ USDm)
@@ -137,7 +137,7 @@ Configure swap provider addresses in the CLI with `set swap_provider_usdm_addres
 
 To verify the USDm balance updates on the dashboard after load and after Refresh:
 
-1. Start the app server and wallet RPC (and optionally havend): `node server.js`, `HAVEN_DAEMON_ADDRESS=http://localhost:17750 ./start-wallet-rpc.sh`
+1. Start the app server and wallet RPC (and optionally havend): `node server.js`, `HAVEN_DAEMON_ADDRESS=http://127.0.0.1:17750 ./start-wallet-rpc.sh`
 2. Run: `npm run test:e2e` (or `npx playwright test tests/dashboard-balance.spec.js`)
 
 The tests open the app in a headless browser, assert the balance element shows a valid value after load, then click Refresh and assert the balance still updates correctly.

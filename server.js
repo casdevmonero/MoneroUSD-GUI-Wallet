@@ -11,13 +11,12 @@ const crypto = require('crypto');
 const { spawn } = require('child_process');
 
 const PORT = parseInt(process.env.PORT || '3000', 10);
-const LOCALHOST = '127.0.0.1';
-const DAEMON_RPC = process.env.DAEMON_RPC_URL || 'http://' + LOCALHOST + ':17750';
+const DAEMON_RPC = process.env.DAEMON_RPC_URL || 'http://127.0.0.1:17750';
 
 // Wallet-rpc binary and config
 const WALLET_RPC_BIN = process.env.WALLET_RPC_BIN
-  || 'USDm-wallet-rpc';
-const DAEMON_ADDRESS = 'http://' + LOCALHOST + ':17750';
+  || '/root/MoneroUSD/MoneroUSD-main/build-linux/bin/USDm-wallet-rpc';
+const DAEMON_ADDRESS = 'http://127.0.0.1:17750';
 
 // Per-user session config
 const SESSION_PORT_START = 28000;
@@ -106,7 +105,7 @@ function walletRpc(port, method, params, timeoutMs) {
   return new Promise((resolve, reject) => {
     const body = JSON.stringify({ jsonrpc: '2.0', id: '0', method, params: params || {} });
     const opts = {
-      hostname: LOCALHOST, port, path: '/json_rpc', method: 'POST',
+      hostname: '127.0.0.1', port, path: '/json_rpc', method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
     };
     const req = http.request(opts, (res) => {
@@ -149,7 +148,7 @@ async function createSession() {
   });
 
   const args = [
-    '--rpc-bind-ip', LOCALHOST,
+    '--rpc-bind-ip', '127.0.0.1',
     '--rpc-bind-port', String(port),
     '--disable-rpc-login',
     '--wallet-dir', walletDir,
@@ -273,7 +272,7 @@ function parseTarget(target) {
   try {
     const u = new URL(target);
     const host = (u.hostname || '').toLowerCase();
-    if (host !== LOCALHOST && host !== '::1' && host !== 'localhost') return null;
+    if (host !== '127.0.0.1' && host !== '::1' && host !== 'localhost') return null;
     return { hostname: u.hostname, port: u.port || (u.protocol === 'https:' ? 443 : 80), protocol: u.protocol };
   } catch (_) {
     return null;
@@ -385,7 +384,7 @@ const server = http.createServer(async (req, res) => {
         : 90000;
 
       const opts = {
-        hostname: LOCALHOST,
+        hostname: '127.0.0.1',
         port: session.port,
         path: '/json_rpc',
         method: 'POST',
@@ -471,7 +470,7 @@ const server = http.createServer(async (req, res) => {
       body += chunk;
     });
     req.on('end', () => {
-      const dParsed = parseTarget(DAEMON_RPC) || { hostname: LOCALHOST, port: '17750', protocol: 'http:' };
+      const dParsed = parseTarget(DAEMON_RPC) || { hostname: '127.0.0.1', port: '17750', protocol: 'http:' };
       const opts = {
         hostname: dParsed.hostname,
         port: dParsed.port,
@@ -502,7 +501,7 @@ const server = http.createServer(async (req, res) => {
     let body = '';
     req.on('data', (chunk) => (body += chunk));
     req.on('end', () => {
-      const dParsed = parseTarget(DAEMON_RPC) || { hostname: LOCALHOST, port: '17750', protocol: 'http:' };
+      const dParsed = parseTarget(DAEMON_RPC) || { hostname: '127.0.0.1', port: '17750', protocol: 'http:' };
       const opts = {
         hostname: dParsed.hostname,
         port: dParsed.port,
@@ -516,7 +515,7 @@ const server = http.createServer(async (req, res) => {
         rpcRes.on('data', (chunk) => (buf += chunk));
         rpcRes.on('end', () => {
           const origin = req.headers.origin || '';
-          const allowedOrigin = /^https?:\/\/(localhost|.*\.monerousd\.org|monerousd\.org)(:\d+)?$/.test(origin) || origin.match(new RegExp('^https?:\\/\\/' + LOCALHOST.replace(/\./g, '\\.') + '(:\\d+)?$')) ? origin : '';
+          const allowedOrigin = /^https?:\/\/(localhost|127\.0\.0\.1|.*\.monerousd\.org|monerousd\.org)(:\d+)?$/.test(origin) ? origin : '';
           const corsHeaders = { 'Content-Type': 'application/json' };
           if (allowedOrigin) corsHeaders['Access-Control-Allow-Origin'] = allowedOrigin;
           res.writeHead(rpcRes.statusCode || 200, corsHeaders);
@@ -596,7 +595,7 @@ let miningInProgress = false;
 
 function daemonRpc(method, params) {
   return new Promise((resolve, reject) => {
-    const dParsed = parseTarget(DAEMON_RPC) || { hostname: LOCALHOST, port: '17750', protocol: 'http:' };
+    const dParsed = parseTarget(DAEMON_RPC) || { hostname: '127.0.0.1', port: '17750', protocol: 'http:' };
     const body = JSON.stringify({ jsonrpc: '2.0', id: '0', method, params: params || {} });
     const opts = {
       hostname: dParsed.hostname, port: dParsed.port, path: '/json_rpc', method: 'POST',
@@ -614,11 +613,11 @@ function daemonRpc(method, params) {
   });
 }
 
-const MINER_ADDRESS = process.env.MINER_ADDRESS || '';
+const MINER_ADDRESS = process.env.MINER_ADDRESS || 'Moz5T2Abptdgu8AoXTkjNibmu5cnLtDYS29tmCUnYamd99oizcM9uLJFniiGiZUzAq3ZSyYyc1ZqkeTWCcR7A3YJR5tkrwS';
 
 function daemonRest(urlPath, body) {
   return new Promise((resolve, reject) => {
-    const dParsed = parseTarget(DAEMON_RPC) || { hostname: LOCALHOST, port: '17750', protocol: 'http:' };
+    const dParsed = parseTarget(DAEMON_RPC) || { hostname: '127.0.0.1', port: '17750', protocol: 'http:' };
     const data = body ? JSON.stringify(body) : '';
     const opts = {
       hostname: dParsed.hostname, port: dParsed.port, path: urlPath,

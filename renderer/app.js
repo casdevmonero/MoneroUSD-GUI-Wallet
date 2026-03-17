@@ -1566,8 +1566,8 @@
       const result = await rpc('get_address', { account_index: 0 });
       const addr = result.address || result.addresses?.[0]?.address || '';
       currentWalletAddress = addr || '';
-      if (addr && typeof _swapSyncSucceeded !== 'undefined' && !_swapSyncSucceeded) {
-        syncSwapHistoryFromServer();
+      if (addr && typeof window._triggerSwapSync === 'function') {
+        window._triggerSwapSync();
       }
       document.getElementById('receiveAddress').textContent = addr || 'Connect wallet RPC in Settings';
       const canvas = document.getElementById('receiveQrCanvas');
@@ -1916,8 +1916,8 @@
         const subAddr = sub && (sub.address || sub.addresses?.[0]?.address) ? (sub.address || sub.addresses?.[0]?.address) : '';
         if (subAddr) {
           currentWalletAddress = subAddr;
-          if (typeof _swapSyncSucceeded !== 'undefined' && !_swapSyncSucceeded) {
-            syncSwapHistoryFromServer();
+          if (typeof window._triggerSwapSync === 'function') {
+            window._triggerSwapSync();
           }
           document.getElementById('receiveAddress').textContent = subAddr;
         } else {
@@ -2190,6 +2190,7 @@
       });
     }
     const actionBtn = document.getElementById('swapActionBtn');
+    const cancelBtn = document.getElementById('swapCancelBtn');
     const newSwapBtn = document.getElementById('swapNewBtn');
     const backendHint = document.getElementById('swapBackendHint');
     const swapHistoryList = document.getElementById('swapHistoryList');
@@ -2276,8 +2277,36 @@
           '</div>' +
           '<span class="swap-history-status ' + escHtml(swapStatusClass(s.status)) + '">' + escHtml(swapStatusLabel(s.status)) + '</span>';
         if (isSwapPending(s.status)) {
-          item.title = 'Click to resume polling';
-          item.addEventListener('click', () => resumeSwap(s));
+          // Add resume + cancel buttons for pending swaps
+          const btnWrap = document.createElement('span');
+          btnWrap.style.cssText = 'display:flex;gap:6px;align-items:center;';
+          const resumeBtn = document.createElement('button');
+          resumeBtn.className = 'btn btn-sm btn-ghost';
+          resumeBtn.textContent = 'Resume';
+          resumeBtn.style.cssText = 'font-size:11px;padding:2px 8px;';
+          resumeBtn.addEventListener('click', (e) => { e.stopPropagation(); resumeSwap(s); });
+          const histCancelBtn = document.createElement('button');
+          histCancelBtn.className = 'btn btn-sm';
+          histCancelBtn.textContent = 'Cancel';
+          histCancelBtn.style.cssText = 'font-size:11px;padding:2px 8px;background:#d9534f;color:#fff;border:none;border-radius:4px;cursor:pointer;';
+          histCancelBtn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            if (!confirm('Cancel this swap?')) return;
+            try {
+              histCancelBtn.disabled = true;
+              histCancelBtn.textContent = '…';
+              await swapFetch(`/api/swaps/${s.swap_id}/cancel`, { method: 'POST' });
+              persistSwap({ swap_id: s.swap_id, status: 'cancelled', error: 'Cancelled by user' });
+              renderSwapHistory();
+            } catch (err) {
+              histCancelBtn.textContent = 'Error';
+              setTimeout(() => { histCancelBtn.textContent = 'Cancel'; histCancelBtn.disabled = false; }, 2000);
+            }
+          });
+          btnWrap.appendChild(resumeBtn);
+          btnWrap.appendChild(histCancelBtn);
+          item.querySelector('.swap-history-status')?.replaceWith(btnWrap);
+          item.title = 'Pending swap';
         }
         swapHistoryList.appendChild(item);
       });
@@ -2296,6 +2325,7 @@
       setStatus('Resuming swap ' + (swapId || '').slice(0, 8) + '...');
       if (actionBtn) { actionBtn.disabled = true; actionBtn.textContent = 'Polling...'; }
       if (newSwapBtn) newSwapBtn.classList.remove('hidden');
+      if (cancelBtn) cancelBtn.classList.remove('hidden');
       startPolling();
       pollSwapStatus();
     }
@@ -2372,6 +2402,7 @@
       setPriceMeta('—');
       if (actionBtn) { actionBtn.disabled = false; actionBtn.textContent = swapMode === 'crypto_to_usdm' ? 'Generate swap' : 'Burn USDm & swap'; }
       if (newSwapBtn) newSwapBtn.classList.add('hidden');
+      if (cancelBtn) cancelBtn.classList.add('hidden');
       if (amountEl) amountEl.disabled = false;
       if (fromSel) fromSel.disabled = false;
       if (toSel) toSel.disabled = false;
@@ -2575,6 +2606,7 @@
       if (fromSel) fromSel.disabled = true;
       if (toSel) toSel.disabled = true;
       if (newSwapBtn) newSwapBtn.classList.remove('hidden');
+      if (cancelBtn) cancelBtn.classList.remove('hidden');
     }
 
     async function submitBurn() {
@@ -2623,6 +2655,7 @@
             : '';
           setStatus('USDm minted and sent.' + mintTxLink, 'success');
           stopPolling();
+          if (cancelBtn) cancelBtn.classList.add('hidden');
           refreshBalances({ force: true }).catch(() => {});
           refreshTransfers().catch(() => {});
         } else if (status === 'awaiting_burn') {
@@ -2637,9 +2670,15 @@
             : '';
           setStatus('Payout sent.' + payoutTxLink, 'success');
           stopPolling();
+          if (cancelBtn) cancelBtn.classList.add('hidden');
         } else if (status === 'failed') {
           setStatus(escHtml(res.error || 'Swap failed.'), 'error');
           stopPolling();
+          if (cancelBtn) cancelBtn.classList.add('hidden');
+        } else if (status === 'cancelled') {
+          setStatus('Swap cancelled.', 'error');
+          stopPolling();
+          if (cancelBtn) cancelBtn.classList.add('hidden');
         }
       } catch (_) {}
     }
@@ -2683,6 +2722,25 @@
       updateQuote();
     });
     actionBtn?.addEventListener('click', handleSwapAction);
+    cancelBtn?.addEventListener('click', async () => {
+      if (!swapId) return;
+      if (!confirm('Cancel this swap? If you already sent a deposit, contact support.')) return;
+      try {
+        cancelBtn.disabled = true;
+        cancelBtn.textContent = 'Cancelling…';
+        await swapFetch(`/api/swaps/${swapId}/cancel`, { method: 'POST' });
+        persistSwap({ swap_id: swapId, status: 'cancelled', error: 'Cancelled by user' });
+        setStatus('Swap cancelled.', 'error');
+        stopPolling();
+        cancelBtn.classList.add('hidden');
+        renderSwapHistory();
+      } catch (e) {
+        setStatus('Cancel failed: ' + escHtml(e.message || 'Unknown error'), 'error');
+      } finally {
+        cancelBtn.disabled = false;
+        cancelBtn.textContent = 'Cancel Swap';
+      }
+    });
     newSwapBtn?.addEventListener('click', () => {
       resetSwapUi();
       refreshPrice();
@@ -2772,16 +2830,38 @@
         autoResumePendingSwaps();
       } catch (_) {} // Non-critical — local history still works
     }
+    // Expose sync function so code outside bindSwap() scope can trigger it
+    window._triggerSwapSync = function() {
+      if (!_swapSyncSucceeded) syncSwapHistoryFromServer();
+    };
     // Run after a short delay to not block UI initialization
     setTimeout(syncSwapHistoryFromServer, 3000);
 
+    // Background poll ALL pending swaps (not just the focused one)
+    let bgPollTimer = null;
     function autoResumePendingSwaps() {
+      if (bgPollTimer) clearInterval(bgPollTimer);
+      bgPollTimer = setInterval(pollAllPendingSwaps, 10000);
+      pollAllPendingSwaps(); // Run immediately
+    }
+    async function pollAllPendingSwaps() {
       const swaps = getSwapsForWallet(getSwapWalletKey());
-      const pending = swaps.find((s) => isSwapPending(s.status));
-      if (pending) {
-        // Auto-resume the most recent pending swap in background (don't open modal)
-        swapId = pending.swap_id;
-        startPolling();
+      const pending = swaps.filter((s) => isSwapPending(s.status));
+      if (pending.length === 0) { if (bgPollTimer) { clearInterval(bgPollTimer); bgPollTimer = null; } return; }
+      for (const s of pending) {
+        try {
+          const res = await swapFetch(`/api/swaps/${s.swap_id}`);
+          if (!res) continue;
+          if (res.status !== s.status) {
+            persistSwap({
+              swap_id: s.swap_id, status: res.status,
+              minted_tx: res.minted_tx, payout_tx: res.payout_tx, error: res.error,
+            });
+            renderSwapHistory();
+            // If this is the actively focused swap, update UI
+            if (swapId === s.swap_id) pollSwapStatus();
+          }
+        } catch (_) {}
       }
     }
   }
@@ -3147,8 +3227,8 @@
         if (r && r.address) {
           currentWalletAddress = r.address;
           addr = r.address;
-          if (typeof _swapSyncSucceeded !== 'undefined' && !_swapSyncSucceeded) {
-            syncSwapHistoryFromServer();
+          if (typeof window._triggerSwapSync === 'function') {
+            window._triggerSwapSync();
           }
         }
       } catch (_) {}

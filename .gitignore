@@ -8,3 +8,11 @@ wallet-data/
 *.wallet
 .env
 .env.*
+test-results/
+.claude/
+*.pem
+*.p12
+rpc_ssl.*
+genesis/
+.shared-ringdb/
+*.mdb

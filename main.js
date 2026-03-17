@@ -13,7 +13,9 @@ let isUpdating = false; // true when quitAndInstall is about to fire
 /* ── Auto-Update (OTA) ─────────────────────────────────────── */
 autoUpdater.autoDownload = true;           // silently download when available
 autoUpdater.autoInstallOnAppQuit = true;
-autoUpdater.logger = require('electron').app.isPackaged ? null : console;
+// Always enable logging for update debugging
+autoUpdater.logger = console;
+autoUpdater.logger.transports = { file: { level: 'info' } };
 
 function initAutoUpdater() {
   autoUpdater.checkForUpdates().catch(() => {});
@@ -55,8 +57,15 @@ function initAutoUpdater() {
       if (localDaemon && !localDaemon.killed) { try { localDaemon.kill('SIGKILL'); } catch(_){} }
       localWalletRpc = null;
       localDaemon = null;
-      // isSilent=true (no installer UI on Windows), isForceRunAfter=true (restart app after install)
-      autoUpdater.quitAndInstall(true, true);
+      console.log('[update] Calling quitAndInstall...');
+      try {
+        // isSilent=true (no installer UI on Windows), isForceRunAfter=true (restart app after install)
+        autoUpdater.quitAndInstall(true, true);
+      } catch (e) {
+        console.error('[update] quitAndInstall failed:', e);
+        // Fallback: force quit and let autoInstallOnAppQuit handle it on next launch
+        app.quit();
+      }
     }, 8000);
   });
 
@@ -92,7 +101,13 @@ ipcMain.handle('update-install', () => {
   if (localDaemon && !localDaemon.killed) { try { localDaemon.kill('SIGKILL'); } catch(_){} }
   localWalletRpc = null;
   localDaemon = null;
-  autoUpdater.quitAndInstall(true, true);
+  console.log('[update] Manual quitAndInstall triggered');
+  try {
+    autoUpdater.quitAndInstall(true, true);
+  } catch (e) {
+    console.error('[update] quitAndInstall failed:', e);
+    app.quit();
+  }
 });
 
 // Check for updates every 4 hours

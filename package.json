@@ -1,6 +1,6 @@
 {
   "name": "monerousd-desktop",
-  "version": "1.2.2",
+  "version": "1.2.3",
   "description": "Monero USD desktop wallet - balance, send, receive, swap",
   "main": "main.js",
   "scripts": {
@@ -70,8 +70,8 @@
       "category": "Finance"
     },
     "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
+      "oneClick": true,
+      "perMachine": false,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true
     }

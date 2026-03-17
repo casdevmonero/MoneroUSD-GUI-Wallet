@@ -22,6 +22,8 @@
   const DEFAULT_SWAP_BACKEND = 'https://swap.monerousd.org';
   const LEGACY_SWAP_BACKEND = 'http://127.0.0.1:8787';
   const DEFAULT_EXPLORER_URL = 'https://explorer.monerousd.org';
+  const BTC_EXPLORER_URL = 'https://mempool.space';
+  const XMR_EXPLORER_URL = 'https://xmrchain.net';
   const BTC_RESERVE_ADDRESS = 'bc1qukurxzulh6h356ctnqudqz5kfna5g6ehrcqhn4';
   const XMR_RESERVE_ADDRESS = '49W1wHiiYPsSneF6f1umpJ2Gqgwx7xwVP6KH27Q7p5B8jXHVe8CgwDBEALHSMK9BREK3EqExsLXzmehzsJqGbHHw5XXHCwa';
   // Dashboard balance: USDm only. Never use XUSD or other assets for balance.
@@ -54,6 +56,24 @@
   // HTML entity escaping — prevents XSS when interpolating external data into innerHTML
   function escHtml(str) {
     return String(str == null ? '' : str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
+  // Get the block explorer TX URL for a given asset
+  function getTxExplorerUrl(asset, txid) {
+    if (!txid) return '';
+    if (asset === 'BTC') return BTC_EXPLORER_URL + '/tx/' + txid;
+    if (asset === 'XMR') return XMR_EXPLORER_URL + '/tx/' + txid;
+    return DEFAULT_EXPLORER_URL + '/tx/' + txid; // USDm / default
+  }
+
+  // Build a clickable TX link for a given asset
+  function txLink(asset, txid, opts) {
+    if (!txid) return '';
+    const safe = escHtml(txid);
+    const url = getTxExplorerUrl(asset, safe);
+    const label = (opts && opts.label) || (safe.slice(0, 12) + '…');
+    const cls = (opts && opts.cls) || 'tx-link';
+    return '<a href="' + url + '" target="_blank" rel="noopener" class="' + cls + '" title="View on explorer">' + label + '</a>';
   }
 
   // Clipboard helper — works on HTTP (non-secure) contexts via textarea fallback
@@ -1727,6 +1747,8 @@
       const isPending = s.status && s.status !== 'minted' && s.status !== 'payout_sent' && s.status !== 'failed';
       const isFailed = s.status === 'failed';
       const time = s.created_at ? new Date(s.created_at).getTime() : 0;
+      // For explorer links: minted TXs are on USDm chain, payout TXs are on BTC/XMR chain
+      const txExplorerAsset = isMint ? 'USDm' : (s.asset || 'USDm');
       items.push({
         icon: '⇄',
         dirClass: isMint ? 'recent-item-in' : 'recent-item-out',
@@ -1738,6 +1760,7 @@
         isPending,
         isFailed,
         txid,
+        txExplorerAsset,
         source: 'swap',
       });
     });
@@ -1756,16 +1779,15 @@
       if (t.isPending) statusHtml = '<span class="recent-status recent-status-pending">Pending</span>';
       else if (t.isFailed) statusHtml = '<span class="recent-status recent-status-failed">Failed</span>';
 
-      const safeTxid = escHtml(t.txid);
-      const txLink = t.txid
-        ? ' <a href="' + explorerBase + '/tx/' + safeTxid + '" target="_blank" rel="noopener" class="recent-tx-link" title="View on explorer">' + safeTxid.slice(0, 10) + '…</a>'
+      const recentTxLink = t.txid
+        ? ' ' + txLink(t.txExplorerAsset || 'USDm', t.txid, { label: escHtml(t.txid).slice(0, 10) + '…', cls: 'recent-tx-link' })
         : '';
 
       return `<div class="recent-item ${escHtml(t.dirClass)}">
         <div class="recent-item-icon">${escHtml(t.icon)}</div>
         <div class="recent-item-info">
           <span class="recent-item-label">${escHtml(t.label)}</span>
-          <span class="recent-item-time">${escHtml(timeStr)}${statusHtml ? ' ' + statusHtml : ''}${txLink}</span>
+          <span class="recent-item-time">${escHtml(timeStr)}${statusHtml ? ' ' + statusHtml : ''}${recentTxLink}</span>
         </div>
         <div class="recent-item-amount ${escHtml(t.dirClass)}">${escHtml(t.sign)}${escHtml(t.amount)} ${escHtml(t.asset)}</div>
       </div>`;
@@ -2237,10 +2259,14 @@
           ? (s.amount || '?') + ' ' + (s.asset || '')
           : (s.amount_usdm || '?') + ' USDm';
         const date = s.created_at ? new Date(s.created_at).toLocaleDateString() : '';
+        const isMint = s.direction === 'crypto_to_usdm';
+        const historyTxid = isMint ? (s.minted_tx || '') : (s.payout_tx || '');
+        const historyTxAsset = isMint ? 'USDm' : (s.asset || 'USDm');
+        const historyTxHtml = historyTxid ? ' · ' + txLink(historyTxAsset, historyTxid, { label: escHtml(historyTxid).slice(0, 8) + '…' }) : '';
         item.innerHTML =
           '<div class="swap-history-left">' +
             '<span class="swap-history-dir">' + escHtml(dir) + '</span>' +
-            '<span class="swap-history-detail">' + escHtml(amount) + (date ? ' \u00b7 ' + escHtml(date) : '') + ' \u00b7 ' + escHtml((s.swap_id || '').slice(0, 8)) + '</span>' +
+            '<span class="swap-history-detail">' + escHtml(amount) + (date ? ' \u00b7 ' + escHtml(date) : '') + ' \u00b7 ' + escHtml((s.swap_id || '').slice(0, 8)) + historyTxHtml + '</span>' +
           '</div>' +
           '<span class="swap-history-status ' + escHtml(swapStatusClass(s.status)) + '">' + escHtml(swapStatusLabel(s.status)) + '</span>';
         if (isSwapPending(s.status)) {
@@ -2586,12 +2612,10 @@
         } else if (status === 'deposit_confirmed') {
           setStatus('Deposit confirmed. Minting USDm…');
         } else if (status === 'minted') {
-          const explorerBase = DEFAULT_EXPLORER_URL;
-          const txHash = escHtml(res.minted_tx || '');
-          const txLink = txHash
-            ? ` <a href="${explorerBase}/tx/${txHash}" target="_blank" class="tx-link">${txHash.slice(0, 12)}…</a>`
+          const mintTxLink = res.minted_tx
+            ? ' ' + txLink('USDm', res.minted_tx)
             : '';
-          setStatus('USDm minted and sent.' + txLink, 'success');
+          setStatus('USDm minted and sent.' + mintTxLink, 'success');
           stopPolling();
           refreshBalances({ force: true }).catch(() => {});
           refreshTransfers().catch(() => {});
@@ -2603,7 +2627,7 @@
           setStatus('Burn confirmed. Sending payout…');
         } else if (status === 'payout_sent') {
           const payoutTxLink = res.payout_tx
-            ? ` TX: ${escHtml(res.payout_tx.slice(0, 12))}…`
+            ? ' ' + txLink(swapAsset, res.payout_tx)
             : '';
           setStatus('Payout sent.' + payoutTxLink, 'success');
           stopPolling();
@@ -2673,9 +2697,17 @@
 
     // Recover swap history from server when wallet address is available
     // (handles case where user restores from seed on a new device)
+    let _swapSyncRetries = 0;
     async function syncSwapHistoryFromServer() {
       const addr = currentWalletAddress;
-      if (!addr) return;
+      if (!addr) {
+        // Wallet address not yet available — retry up to 10 times (30s total)
+        if (_swapSyncRetries < 10) {
+          _swapSyncRetries++;
+          setTimeout(syncSwapHistoryFromServer, 3000);
+        }
+        return;
+      }
       try {
         const res = await swapFetch(`/api/swaps?wallet=${encodeURIComponent(addr)}`);
         if (res && Array.isArray(res.swaps) && res.swaps.length > 0) {
@@ -4927,7 +4959,9 @@
       storageSet(PRIMARY_WALLET_KEY, '');
       storageSet(ACTIVE_WALLET_KEY, '');
       storageSet(FIRST_WALLET_KEY, '');
-      storageSet(SWAP_HISTORY_KEY, '');
+      // NOTE: Do NOT clear SWAP_HISTORY_KEY here — swap history is keyed by wallet
+      // address and gets synced from server. Clearing it causes swaps to disappear
+      // on refresh until server sync completes (which needs wallet address first).
       // Clear wallet list
       try { localStorage.removeItem(walletListStorageKey()); } catch (_) {}
       walletPasswordCache.clear();

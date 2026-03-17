@@ -2109,8 +2109,33 @@
     const depositSection = document.getElementById('swapDepositSection');
     const depositAddressEl = document.getElementById('swapDepositAddress');
     const depositAmountEl = document.getElementById('swapDepositAmount');
+    const copyDepositBtn = document.getElementById('swapCopyDepositAddr');
     const qrCanvas = document.getElementById('swapQrCanvas');
     const statusEl = document.getElementById('swapStatus');
+
+    // Copy deposit address button
+    if (copyDepositBtn) {
+      copyDepositBtn.addEventListener('click', () => {
+        const addr = (depositAddressEl?.textContent || '').trim();
+        if (!addr || addr === '—') return;
+        navigator.clipboard.writeText(addr).then(() => {
+          copyDepositBtn.textContent = 'Copied!';
+          setTimeout(() => { copyDepositBtn.textContent = 'Copy'; }, 2000);
+        }).catch(() => {
+          // Fallback for non-HTTPS contexts
+          const ta = document.createElement('textarea');
+          ta.value = addr;
+          ta.style.position = 'fixed';
+          ta.style.opacity = '0';
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand('copy');
+          document.body.removeChild(ta);
+          copyDepositBtn.textContent = 'Copied!';
+          setTimeout(() => { copyDepositBtn.textContent = 'Copy'; }, 2000);
+        });
+      });
+    }
     const actionBtn = document.getElementById('swapActionBtn');
     const newSwapBtn = document.getElementById('swapNewBtn');
     const backendHint = document.getElementById('swapBackendHint');

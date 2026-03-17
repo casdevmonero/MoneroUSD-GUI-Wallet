@@ -8,6 +8,7 @@ const os = require('os');
 const { autoUpdater } = require('electron-updater');
 
 let mainWindow;
+let isUpdating = false; // true when quitAndInstall is about to fire
 
 /* ── Auto-Update (OTA) ─────────────────────────────────────── */
 autoUpdater.autoDownload = true;           // silently download when available
@@ -48,7 +49,14 @@ function initAutoUpdater() {
     }
     // Auto-restart after a short delay to let the user see the notification
     setTimeout(() => {
-      autoUpdater.quitAndInstall(false, true);
+      isUpdating = true;
+      // Kill child processes immediately so before-quit doesn't block
+      if (localWalletRpc && !localWalletRpc.killed) { try { localWalletRpc.kill('SIGKILL'); } catch(_){} }
+      if (localDaemon && !localDaemon.killed) { try { localDaemon.kill('SIGKILL'); } catch(_){} }
+      localWalletRpc = null;
+      localDaemon = null;
+      // isSilent=true (no installer UI on Windows), isForceRunAfter=true (restart app after install)
+      autoUpdater.quitAndInstall(true, true);
     }, 8000);
   });
 
@@ -79,7 +87,12 @@ ipcMain.handle('update-download', async () => {
 });
 
 ipcMain.handle('update-install', () => {
-  autoUpdater.quitAndInstall(false, true);
+  isUpdating = true;
+  if (localWalletRpc && !localWalletRpc.killed) { try { localWalletRpc.kill('SIGKILL'); } catch(_){} }
+  if (localDaemon && !localDaemon.killed) { try { localDaemon.kill('SIGKILL'); } catch(_){} }
+  localWalletRpc = null;
+  localDaemon = null;
+  autoUpdater.quitAndInstall(true, true);
 });
 
 // Check for updates every 4 hours
@@ -534,6 +547,8 @@ ipcMain.handle('local-wallet-rpc-stop', async () => {
 
 // Cleanup on app exit
 app.on('before-quit', () => {
+  // If we're updating, child processes are already killed — skip slow cleanup
+  if (isUpdating) return;
   if (localWalletRpc && !localWalletRpc.killed) localWalletRpc.kill('SIGTERM');
   if (localDaemon && !localDaemon.killed) localDaemon.kill('SIGTERM');
   // Destroy remote relay sessions
@@ -671,7 +686,7 @@ app.whenReady().then(() => {
   // Start auto-update checks after a short delay
   setTimeout(initAutoUpdater, 5000);
 });
-app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
+app.on('window-all-closed', () => { if (process.platform !== 'darwin' && !isUpdating) app.quit(); });
 app.on('activate', () => { if (mainWindow === null) createWindow(); });
 
 ipcMain.handle('get-app-version', () => app.getVersion());

@@ -4698,22 +4698,22 @@
 
     let pendingVersion = '';
 
+    // Update auto-downloads in the background; show progress banner
     window.electronAPI.onUpdateAvailable((data) => {
       pendingVersion = data.version;
-      bannerText.textContent = `Update v${data.version} available`;
-      btnAction.textContent = 'Download';
-      btnAction.onclick = () => {
-        window.electronAPI.updateDownload();
-        btnAction.disabled = true;
-        btnAction.textContent = 'Downloading...';
-        progressWrap.classList.remove('hidden');
-      };
+      bannerText.textContent = `Downloading update v${data.version}...`;
+      btnAction.textContent = 'Downloading...';
+      btnAction.disabled = true;
+      progressWrap.classList.remove('hidden');
+      progressBar.style.width = '0%';
+      btnDismiss.classList.add('hidden');
       banner.classList.remove('hidden');
     });
 
     window.electronAPI.onUpdateProgress((data) => {
       progressBar.style.width = data.percent + '%';
-      bannerText.textContent = `Downloading v${pendingVersion}... ${data.percent}%`;
+      bannerText.textContent = `Downloading update v${pendingVersion}... ${data.percent}%`;
+      banner.classList.remove('hidden');
     });
 
     window.electronAPI.onUpdateDownloaded((data) => {
@@ -4722,19 +4722,27 @@
       btnAction.disabled = false;
       btnAction.textContent = 'Restart Now';
       btnAction.onclick = () => window.electronAPI.updateInstall();
-      // Countdown — app will auto-restart in 8 seconds
+      // App will auto-restart in 8 seconds; show a persistent countdown
       let countdown = 8;
-      bannerText.textContent = `v${data.version} downloaded — restarting in ${countdown}s`;
+      bannerText.textContent = `Update v${data.version} ready — restarting in ${countdown}s`;
+      banner.classList.remove('hidden');
+      // Make banner impossible to miss
+      banner.style.background = '#FF6600';
+      banner.style.position = 'fixed';
+      banner.style.top = '0';
+      banner.style.left = '0';
+      banner.style.right = '0';
+      banner.style.zIndex = '99999';
       const timer = setInterval(() => {
         countdown--;
         if (countdown <= 0) {
           clearInterval(timer);
-          bannerText.textContent = `Restarting...`;
+          bannerText.textContent = `Installing update v${data.version}... restarting now`;
+          btnAction.disabled = true;
         } else {
-          bannerText.textContent = `v${data.version} downloaded — restarting in ${countdown}s`;
+          bannerText.textContent = `Update v${data.version} ready — restarting in ${countdown}s`;
         }
       }, 1000);
-      banner.classList.remove('hidden');
     });
 
     window.electronAPI.onUpdateStatus((data) => {
@@ -4742,8 +4750,6 @@
         banner.classList.add('hidden');
       }
     });
-
-    btnDismiss.onclick = () => banner.classList.add('hidden');
   }
 
   // Clear all sensitive inputs (seed phrases, passwords) from the DOM.

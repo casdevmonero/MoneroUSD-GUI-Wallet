@@ -4717,12 +4717,24 @@
     });
 
     window.electronAPI.onUpdateDownloaded((data) => {
-      bannerText.textContent = `v${data.version} ready to install`;
-      btnAction.disabled = false;
-      btnAction.textContent = 'Restart & Update';
-      btnAction.onclick = () => window.electronAPI.updateInstall();
       progressWrap.classList.add('hidden');
       btnDismiss.classList.add('hidden');
+      btnAction.disabled = false;
+      btnAction.textContent = 'Restart Now';
+      btnAction.onclick = () => window.electronAPI.updateInstall();
+      // Countdown — app will auto-restart in 8 seconds
+      let countdown = 8;
+      bannerText.textContent = `v${data.version} downloaded — restarting in ${countdown}s`;
+      const timer = setInterval(() => {
+        countdown--;
+        if (countdown <= 0) {
+          clearInterval(timer);
+          bannerText.textContent = `Restarting...`;
+        } else {
+          bannerText.textContent = `v${data.version} downloaded — restarting in ${countdown}s`;
+        }
+      }, 1000);
+      banner.classList.remove('hidden');
     });
 
     window.electronAPI.onUpdateStatus((data) => {

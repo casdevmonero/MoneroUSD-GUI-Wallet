@@ -10,7 +10,7 @@ const { autoUpdater } = require('electron-updater');
 let mainWindow;
 
 /* ── Auto-Update (OTA) ─────────────────────────────────────── */
-autoUpdater.autoDownload = false;
+autoUpdater.autoDownload = true;           // silently download when available
 autoUpdater.autoInstallOnAppQuit = true;
 autoUpdater.logger = require('electron').app.isPackaged ? null : console;
 
@@ -46,6 +46,10 @@ function initAutoUpdater() {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('update-downloaded', { version: info.version });
     }
+    // Auto-restart after a short delay to let the user see the notification
+    setTimeout(() => {
+      autoUpdater.quitAndInstall(false, true);
+    }, 8000);
   });
 
   autoUpdater.on('error', (err) => {

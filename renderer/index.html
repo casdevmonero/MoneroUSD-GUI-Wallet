@@ -1,0 +1,643 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' http://localhost:* https://*.monerousd.org https://monerousd.org https://api.coingecko.com;" />
+  <title>Monero USD Wallet</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet" />
+</head>
+<body>
+  <!-- Welcome / Onboarding Page -->
+  <div id="welcomePage" class="welcome-page">
+    <div class="welcome-bg"><canvas id="welcomeCanvas"></canvas></div>
+    <div class="welcome-container">
+      <div class="welcome-logo">
+        <img src="logo.svg" alt="MoneroUSD" class="welcome-logo-img" />
+        <h1 class="welcome-title">MoneroUSD</h1>
+        <p class="welcome-subtitle">Private stablecoin wallet</p>
+      </div>
+
+      <!-- Session status (browser mode) -->
+      <p id="welcomeStatus" class="hidden" style="text-align:center;font-size:.85rem;color:var(--accent);margin-bottom:12px"></p>
+
+      <!-- Step 1: Choose action -->
+      <div id="welcomeChoose" class="welcome-step">
+        <div class="welcome-buttons">
+          <button class="btn btn-primary btn-lg welcome-btn" id="welcomeCreateBtn">
+            <span class="welcome-btn-icon">+</span>
+            <span>
+              <strong>Create new wallet</strong>
+              <small>Generate a new seed phrase</small>
+            </span>
+          </button>
+          <button class="btn btn-outline btn-lg welcome-btn" id="welcomeRestoreBtn">
+            <span class="welcome-btn-icon">&#8631;</span>
+            <span>
+              <strong>Restore from seed</strong>
+              <small>Import an existing wallet</small>
+            </span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Step 2a: Restore from seed -->
+      <div id="welcomeRestore" class="welcome-step hidden">
+        <h2 class="welcome-step-title">Restore wallet</h2>
+        <p class="welcome-step-desc">Enter your 25-word seed phrase to restore your wallet.</p>
+        <div class="form-group">
+          <label>Seed phrase</label>
+          <div class="seed-input-wrap">
+            <textarea id="welcomeRestoreSeed" class="input seed-input masked" placeholder="Enter your 25-word seed phrase..." rows="3" autocomplete="off" autocapitalize="off" spellcheck="false" data-gramm="false"></textarea>
+            <button type="button" class="btn btn-ghost btn-sm seed-toggle" id="welcomeRestoreSeedToggle" title="Show/hide seed">Show</button>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Wallet password (optional)</label>
+          <input type="password" id="welcomeRestorePassword" class="input" placeholder="Leave empty for no password" autocomplete="new-password" />
+        </div>
+        <div class="form-group">
+          <label>Restore from block height (0 = scan all)</label>
+          <input type="number" id="welcomeRestoreHeight" class="input" value="0" min="0" />
+        </div>
+        <div class="welcome-step-actions">
+          <button class="btn btn-ghost" id="welcomeRestoreBack">Back</button>
+          <button class="btn btn-primary" id="welcomeRestoreSubmit">Restore wallet</button>
+        </div>
+        <div class="form-message" id="welcomeRestoreMsg"></div>
+      </div>
+
+      <!-- Step 2b: New wallet — show seed -->
+      <div id="welcomeNewSeed" class="welcome-step hidden">
+        <h2 class="welcome-step-title">Your new seed phrase</h2>
+        <p class="welcome-step-desc">Write down these 25 words in order. This is the only way to recover your wallet. Never share your seed.</p>
+        <div class="seed-display" id="welcomeSeedDisplay"></div>
+        <button class="btn btn-outline seed-copy-btn" id="welcomeSeedCopy"><span class="seed-copy-icon">⧉</span> Copy Seed</button>
+        <div class="form-group" style="margin-top:16px">
+          <label>Set wallet password (optional)</label>
+          <input type="password" id="welcomeNewPassword" class="input" placeholder="Leave empty for no password" autocomplete="new-password" />
+        </div>
+        <div class="welcome-step-actions">
+          <button class="btn btn-ghost" id="welcomeNewSeedBack">Back</button>
+          <button class="btn btn-primary" id="welcomeNewSeedNext">I wrote it down</button>
+        </div>
+        <div class="form-message" id="welcomeNewSeedMsg"></div>
+      </div>
+
+      <!-- Step 3: Verify seed -->
+      <div id="welcomeVerify" class="welcome-step hidden">
+        <h2 class="welcome-step-title">Verify your seed</h2>
+        <p class="welcome-step-desc">Enter the words below to confirm you saved your seed correctly.</p>
+        <div class="verify-fields">
+          <div class="form-group">
+            <label id="welcomeVerifyLabel1">Word #1</label>
+            <input type="text" id="welcomeVerifyWord1" class="input" placeholder="Enter word" autocomplete="off" />
+          </div>
+          <div class="form-group">
+            <label id="welcomeVerifyLabel2">Word #8</label>
+            <input type="text" id="welcomeVerifyWord2" class="input" placeholder="Enter word" autocomplete="off" />
+          </div>
+        </div>
+        <div class="welcome-step-actions">
+          <button class="btn btn-ghost" id="welcomeVerifyBack">Back</button>
+          <button class="btn btn-primary" id="welcomeVerifySubmit">Verify & open wallet</button>
+        </div>
+        <div class="form-message" id="welcomeVerifyMsg"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="app hidden" id="mainApp">
+    <aside class="sidebar">
+      <div class="logo">
+        <img src="logo.svg" alt="MoneroUSD" class="logo-img" />
+        <span>MoneroUSD</span>
+        <button class="mobile-menu-btn" id="mobileMenuBtn" aria-label="Menu">&#9776;</button>
+      </div>
+      <nav class="nav" id="sidebarNav">
+        <button class="nav-btn active" data-page="dashboard">
+          <span class="nav-icon">&#9670;</span>
+          <span>Dashboard</span>
+        </button>
+        <button class="nav-btn" data-page="send">
+          <span class="nav-icon">&#8593;</span>
+          <span>Send</span>
+        </button>
+        <button class="nav-btn" data-page="receive">
+          <span class="nav-icon">&#8595;</span>
+          <span>Receive</span>
+        </button>
+        <button class="nav-btn" data-page="addressbook">
+          <span class="nav-icon">&#9783;</span>
+          <span>Addressbook</span>
+        </button>
+        <button class="nav-btn" data-page="swap">
+          <span class="nav-icon">&#8644;</span>
+          <span>Swap</span>
+        </button>
+        <button class="nav-btn" data-page="staking">
+          <span class="nav-icon">&#9733;</span>
+          <span>Staking</span>
+        </button>
+        <button class="nav-btn" data-page="lending">
+          <span class="nav-icon">&#9879;</span>
+          <span>Lending</span>
+        </button>
+        <button class="nav-btn" data-page="history">
+          <span class="nav-icon">&#9776;</span>
+          <span>History</span>
+        </button>
+        <button class="nav-btn" data-page="import">
+          <span class="nav-icon">&#9112;</span>
+          <span>Import</span>
+        </button>
+        <button class="nav-btn" data-page="settings">
+          <span class="nav-icon">&#9881;</span>
+          <span>Settings</span>
+        </button>
+      </nav>
+      <div class="sidebar-actions">
+        <button class="btn btn-ghost btn-sm" id="btnCreateWallet">Generate new wallet</button>
+        <button class="btn btn-ghost btn-sm" id="btnDisconnectWallet">Disconnect wallet</button>
+        <button class="btn btn-ghost btn-sm" id="btnLogout">Logout</button>
+      </div>
+      <div class="sidebar-footer">
+        <div class="rpc-status" id="rpcStatus">
+          <span class="status-dot"></span>
+          <span>Disconnected</span>
+        </div>
+      </div>
+    </aside>
+
+    <main class="content">
+      <header class="content-header">
+        <h1 id="pageTitle">Dashboard</h1>
+        <div class="header-actions">
+          <button class="btn btn-ghost" id="btnRescan" title="Rescan blockchain (rebuild wallet view)">Rescan</button>
+          <button class="btn btn-ghost" id="btnRefresh" title="Refresh">↻</button>
+        </div>
+      </header>
+
+      <div id="syncStatusBanner" class="sync-banner hidden" role="status" aria-live="polite"></div>
+
+      <section id="pageDashboard" class="page active">
+        <div class="balance-cards">
+          <div class="balance-card primary">
+            <span class="balance-label">USDm Balance</span>
+            <span class="balance-value" id="balanceUsdm">—</span>
+            <span class="balance-unlocked hidden" id="unlockedUsdm"></span>
+          </div>
+        </div>
+        <div class="quick-actions">
+          <button class="quick-btn" data-goto="send">Send USDm</button>
+          <button class="quick-btn" data-goto="receive">Receive</button>
+          <button class="quick-btn" data-goto="swap">Swap XMR ↔ USDm</button>
+        </div>
+        <div class="recent-section">
+          <div class="recent-header">
+            <h3>Recent activity</h3>
+            <a href="#" class="recent-view-all" data-goto="history">View all</a>
+          </div>
+          <div class="recent-list" id="recentList">
+            <div class="recent-empty">No recent transactions</div>
+          </div>
+        </div>
+      </section>
+
+      <section id="pageSend" class="page">
+        <div class="card form-card">
+          <h3>Send USDm</h3>
+          <div class="form-group">
+            <label>Address</label>
+            <input type="text" id="sendAddress" placeholder="MJ..." class="input" />
+          </div>
+          <div class="form-group">
+            <label>Amount (USDm)</label>
+            <input type="text" id="sendAmount" placeholder="0.00" class="input" />
+          </div>
+          <div class="form-message" id="sendBalanceHint"></div>
+          <div class="form-group">
+            <label>Priority</label>
+            <select id="sendPriority" class="input">
+              <option value="1">Default</option>
+              <option value="2">Low</option>
+              <option value="3">Medium</option>
+              <option value="4">High</option>
+            </select>
+          </div>
+          <button class="btn btn-primary btn-block" id="btnSend">Send</button>
+          <div class="form-message" id="sendMessage"></div>
+        </div>
+      </section>
+
+      <section id="pageReceive" class="page">
+        <div class="card">
+          <h3>Receive USDm</h3>
+          <p class="text-muted">Share this address to receive payments.</p>
+          <div class="address-box">
+            <code id="receiveAddress">Connect wallet RPC in Settings</code>
+            <button class="btn btn-ghost btn-sm" id="btnCopyAddress">Copy</button>
+          </div>
+          <div class="receive-qr">
+            <canvas id="receiveQrCanvas" width="160" height="160" aria-label="Receive address QR code"></canvas>
+          </div>
+          <p class="text-muted small">Default (primary) address. Use CLI for subaddresses.</p>
+        </div>
+      </section>
+
+      <section id="pageAddressbook" class="page">
+        <div class="card">
+          <h3>Addressbook</h3>
+          <p class="text-muted">Switch between wallets saved on the wallet RPC. The first wallet is always kept.</p>
+          <div class="form-group">
+            <label>Wallet filename</label>
+            <input type="text" id="addressbookWalletName" placeholder="wallet filename" class="input" />
+          </div>
+          <div class="wallet-actions">
+            <button class="btn btn-ghost btn-sm" id="btnAddWallet">Add to addressbook</button>
+          </div>
+          <div class="addressbook-list" id="addressbookList">No saved wallets yet.</div>
+          <div class="form-message" id="addressbookMessage"></div>
+        </div>
+      </section>
+
+      <section id="pageSwap" class="page">
+        <div class="card swap-card">
+          <h3>Swap</h3>
+          <p class="text-muted">Swap BTC or XMR for USDm, or burn USDm to receive BTC/XMR. Uses the swap backend for pricing, deposits, and payouts.</p>
+          <button class="btn btn-primary" id="btnOpenSwap">Open swap</button>
+          <p class="text-muted small" id="swapBackendHint">Swap backend: https://swap.monerousd.org (configure in Settings).</p>
+        </div>
+        <div class="card" id="swapHistoryCard">
+          <h3>Swap history</h3>
+          <div class="swap-history-list" id="swapHistoryList">No swaps yet.</div>
+        </div>
+      </section>
+
+      <section id="pageStaking" class="page">
+        <div class="card">
+          <h3>Stake USDm</h3>
+          <p class="text-muted">Lock your USDm to earn yield. Yield comes from protocol revenue (swap fees), never from minting.</p>
+          <div class="staking-overview" id="stakingOverview">
+            <div class="staking-stat">
+              <span class="staking-stat-label">Total Staked</span>
+              <span class="staking-stat-value" id="stakingTotalStaked">—</span>
+            </div>
+            <div class="staking-stat">
+              <span class="staking-stat-label">Total Yield Paid</span>
+              <span class="staking-stat-value" id="stakingTotalYield">—</span>
+            </div>
+          </div>
+        </div>
+        <div class="card">
+          <h3>New Stake</h3>
+          <div class="form-group">
+            <label>Tier</label>
+            <select id="stakeTier" class="input">
+              <option value="flexible">Flexible — 1.5% APR (no lock)</option>
+              <option value="short">Short — 3.0% APR (30 days)</option>
+              <option value="medium">Medium — 4.5% APR (90 days)</option>
+              <option value="long">Long — 6.0% APR (180 days)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Amount (USDm)</label>
+            <input type="text" id="stakeAmount" placeholder="0.00" class="input" />
+          </div>
+          <button class="btn btn-primary btn-block" id="btnStake">Stake</button>
+          <div class="form-message" id="stakeMessage"></div>
+        </div>
+        <div class="card">
+          <h3>Your Stakes</h3>
+          <div id="stakesList" class="stakes-list">No active stakes.</div>
+        </div>
+      </section>
+
+      <section id="pageLending" class="page">
+        <div class="card">
+          <h3>Borrow USDm</h3>
+          <p class="text-muted">Deposit BTC or XMR as collateral and receive USDm. Your collateral stays in protocol reserves, strengthening the peg.</p>
+          <div class="lending-overview" id="lendingOverview">
+            <div class="staking-stat">
+              <span class="staking-stat-label">BTC Price</span>
+              <span class="staking-stat-value" id="lendingBtcPrice">—</span>
+            </div>
+            <div class="staking-stat">
+              <span class="staking-stat-label">XMR Price</span>
+              <span class="staking-stat-value" id="lendingXmrPrice">—</span>
+            </div>
+            <div class="staking-stat">
+              <span class="staking-stat-label">Pool Capacity</span>
+              <span class="staking-stat-value" id="lendingCapacity">—</span>
+            </div>
+            <div class="staking-stat">
+              <span class="staking-stat-label">Utilization</span>
+              <span class="staking-stat-value" id="lendingUtilization">—</span>
+            </div>
+            <div class="staking-stat">
+              <span class="staking-stat-label">BTC Rate</span>
+              <span class="staking-stat-value" id="lendingBtcRate">—</span>
+            </div>
+            <div class="staking-stat">
+              <span class="staking-stat-label">XMR Rate</span>
+              <span class="staking-stat-value" id="lendingXmrRate">—</span>
+            </div>
+          </div>
+        </div>
+        <div class="card">
+          <h3>New Loan</h3>
+          <div class="form-group">
+            <label>Collateral Asset</label>
+            <select id="loanAsset" class="input">
+              <option value="BTC">BTC — 65% max LTV</option>
+              <option value="XMR">XMR — 55% max LTV</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Collateral Amount</label>
+            <input type="text" id="loanCollateralAmount" placeholder="0.00" class="input" />
+          </div>
+          <div class="form-group">
+            <label>Your USDm Address</label>
+            <input type="text" id="loanUsdmAddress" placeholder="MJ..." class="input" />
+          </div>
+          <div class="lending-estimate" id="loanEstimate"></div>
+          <button class="btn btn-primary btn-block" id="btnCreateLoan">Create Loan</button>
+          <div class="form-message" id="loanMessage"></div>
+        </div>
+        <div class="card">
+          <h3>Your Loans</h3>
+          <div id="loansList" class="stakes-list">No active loans.</div>
+        </div>
+      </section>
+
+      <section id="pageHistory" class="page">
+        <div class="card">
+          <h3>Transaction history</h3>
+          <div class="history-controls">
+            <select id="historyType" class="input input-sm">
+              <option value="all">All</option>
+              <option value="in">Incoming</option>
+              <option value="out">Outgoing</option>
+              <option value="pending">Pending</option>
+            </select>
+          </div>
+          <div class="history-list" id="historyList">Connect wallet RPC and click Refresh.</div>
+        </div>
+      </section>
+
+      <section id="pageImport" class="page">
+        <div class="card">
+          <h3>Import wallet from seed phrase</h3>
+          <p class="text-muted">Restore a wallet from your 25-word seed. Data is sent only to your local Monero USD wallet RPC and is never stored or logged.</p>
+          <div class="form-group">
+            <label>Seed phrase (25 words)</label>
+            <div class="seed-input-wrap">
+              <textarea id="importSeed" class="input seed-input masked" placeholder="Enter your 25-word seed phrase…" rows="3" autocomplete="off" autocapitalize="off" spellcheck="false" data-gramm="false"></textarea>
+              <button type="button" class="btn btn-ghost btn-sm seed-toggle" id="importSeedToggle" title="Show/hide seed">Show</button>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Wallet password (optional)</label>
+            <input type="password" id="importPassword" class="input" placeholder="Leave empty for no password" autocomplete="new-password" />
+          </div>
+          <div class="form-group">
+            <label>Seed language</label>
+            <input type="text" id="importLanguage" class="input" value="English" placeholder="English" />
+            <p class="text-muted small">Use the same language shown by CLI command <code>seed_language</code>.</p>
+          </div>
+          <div class="form-group">
+            <label>Restore from block height (0 = from start)</label>
+            <input type="number" id="importRestoreHeight" class="input" value="0" min="0" />
+          </div>
+          <button class="btn btn-primary btn-block" id="btnImport">Import wallet</button>
+          <div class="form-message" id="importMessage"></div>
+        </div>
+      </section>
+
+      <section id="pageSettings" class="page">
+        <div class="card">
+          <h3>Wallet RPC connection</h3>
+          <!-- Browser mode: auto-connected notice with option to use custom node -->
+          <div id="browserModeNotice" class="hidden" style="padding:12px 16px;background:rgba(255,102,0,.08);border:1px solid rgba(255,102,0,.2);border-radius:8px;margin-bottom:16px">
+            <p style="margin:0 0 8px;font-size:.9rem;color:var(--text)"><strong style="color:var(--accent)">&#x1F310; Connected</strong> &mdash; Auto-connected to MoneroUSD relay network.</p>
+            <p style="margin:0 0 10px;font-size:.82rem;color:var(--text2)">For full sovereignty, run your own USDmd node and wallet-rpc, then enter your custom URLs below.</p>
+            <label class="checkbox-row" style="font-size:.85rem;cursor:pointer">
+              <input type="checkbox" id="useCustomNodeToggle" />
+              <span>Use custom node (advanced)</span>
+            </label>
+          </div>
+          <div id="desktopRpcSettings">
+            <div class="form-group">
+              <label>Daemon URL</label>
+              <input type="text" id="daemonUrl" class="input" />
+            </div>
+            <div class="form-group">
+              <label>Wallet RPC URL</label>
+              <input type="text" id="rpcUrl" class="input" />
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Swap backend URL</label>
+            <input type="text" id="swapBackendUrl" value="https://swap.monerousd.org" placeholder="https://swap.monerousd.org" class="input" />
+          </div>
+          <div class="form-group">
+            <label>Light wallet server URL</label>
+            <input type="text" id="lightWalletUrl" placeholder="https://light.monerousd.org" class="input" />
+          </div>
+          <div class="form-group">
+            <label>Light wallet token</label>
+            <input type="password" id="lightWalletToken" placeholder="Required for public server" class="input" />
+          </div>
+          <div class="form-group">
+            <label class="checkbox-row">
+              <input type="checkbox" id="lightWalletEnabled" />
+              <span>Use light wallet server</span>
+            </label>
+          </div>
+          <button class="btn btn-primary" id="btnSaveRpc">Save & connect</button>
+          <div class="form-message" id="settingsMessage"></div>
+        </div>
+        <div class="card">
+          <h3>Wallet keys</h3>
+          <p class="text-muted">View keys are fetched from the wallet RPC and never stored in the browser.</p>
+          <button class="btn btn-ghost btn-sm" id="btnViewKey">Show view private key</button>
+          <div class="address-box">
+            <code id="viewKeyValue">—</code>
+            <button class="btn btn-ghost btn-sm" id="btnCopyViewKey">Copy</button>
+          </div>
+          <div class="form-message" id="viewKeyMessage"></div>
+        </div>
+        <div class="card" id="localNodeCard">
+          <h3>&#127760; Run Local Node</h3>
+          <p class="text-muted">Run your own USDmd full node directly from the wallet. Validates all transactions locally for maximum privacy and security.</p>
+
+          <!-- Setup panel: shown when no node is running -->
+          <div id="nodeSetupPanel">
+            <div class="node-setup-box" id="nodeSetupBox">
+              <div class="node-setup-icon">&#128640;</div>
+              <h4>Create a New Node</h4>
+              <p class="text-muted" style="font-size:0.85rem;margin:6px 0 14px;">One click to set up everything: installs binaries, creates data directories, and starts syncing with the USDm network.</p>
+              <button class="btn btn-primary btn-lg" id="btnCreateNode" style="width:100%;">&#9654; Create Node &amp; Start Syncing</button>
+            </div>
+            <div class="node-setup-steps hidden" id="nodeSetupSteps">
+              <div class="node-setup-step" id="stepBinaries"><span class="step-icon">&#9675;</span> Finding USDmd binaries...</div>
+              <div class="node-setup-step" id="stepDirs"><span class="step-icon">&#9675;</span> Creating data directories...</div>
+              <div class="node-setup-step" id="stepDaemon"><span class="step-icon">&#9675;</span> Starting USDmd daemon...</div>
+              <div class="node-setup-step" id="stepSync"><span class="step-icon">&#9675;</span> Connecting to network...</div>
+            </div>
+          </div>
+
+          <!-- Running panel: shown when node is active -->
+          <div id="nodeRunningPanel" class="hidden">
+            <div class="node-status-bar" id="nodeStatusBar">
+              <span class="node-indicator" id="nodeIndicator">&#9679;</span>
+              <span id="nodeStatusText">Not running</span>
+            </div>
+            <div class="node-sync-bar hidden" id="nodeSyncBar">
+              <div class="node-sync-progress">
+                <div class="node-sync-fill" id="nodeSyncFill" style="width:0%"></div>
+              </div>
+              <span class="node-sync-label" id="nodeSyncLabel">0%</span>
+            </div>
+            <div class="node-stats hidden" id="nodeStats">
+              <div class="node-stat-row"><span>Block Height:</span><span id="nodeHeight">0</span></div>
+              <div class="node-stat-row"><span>Target Height:</span><span id="nodeTargetHeight">—</span></div>
+              <div class="node-stat-row"><span>Peers:</span><span id="nodePeers">0</span></div>
+              <div class="node-stat-row"><span>Network Hashrate:</span><span id="nodeNetHash">—</span></div>
+              <div class="node-stat-row"><span>Tx Pool:</span><span id="nodeTxPool">0</span></div>
+              <div class="node-stat-row"><span>DB Size:</span><span id="nodeDbSize">—</span></div>
+            </div>
+            <div class="node-btn-row">
+              <button class="btn btn-ghost" id="btnStopNode">Stop Node</button>
+            </div>
+          </div>
+
+          <div class="node-advanced hidden" id="nodeAdvanced">
+            <div class="form-group">
+              <label>Seed Node</label>
+              <input type="text" id="nodeSeedNode" class="input" value="seed.monerousd.org:17749" placeholder="host:port" />
+            </div>
+          </div>
+          <button class="btn btn-ghost btn-sm" id="btnNodeAdvanced" style="margin-top:8px;font-size:0.75rem;">Advanced options</button>
+          <details style="margin-top:8px;">
+            <summary class="text-muted" style="cursor:pointer;font-size:0.8rem;">Node Log</summary>
+            <pre class="node-log-output" id="nodeLogOutput" style="max-height:150px;overflow-y:auto;font-size:0.7rem;background:rgba(0,0,0,0.3);padding:8px;border-radius:6px;margin-top:6px;white-space:pre-wrap;word-break:break-all;"></pre>
+          </details>
+          <div class="form-message" id="nodeMessage"></div>
+        </div>
+        <div class="card">
+          <h3>&#9874; Mine USDm</h3>
+          <p class="text-muted">Mine USDm using your CPU. Block rewards are sent to your wallet address.</p>
+          <div class="mining-status-bar" id="miningStatusBar">
+            <span class="mining-indicator" id="miningIndicator">&#9679;</span>
+            <span id="miningStatusText">Not mining</span>
+          </div>
+          <div class="form-group">
+            <label>CPU Threads</label>
+            <div class="mining-threads-row">
+              <input type="range" id="miningThreads" min="1" max="16" value="2" class="input-range" />
+              <span id="miningThreadsLabel" class="threads-label">2 threads</span>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="checkbox-row">
+              <input type="checkbox" id="miningBackground" checked />
+              <span>Background mining (lower priority, won't slow other apps)</span>
+            </label>
+          </div>
+          <div class="mining-stats hidden" id="miningStats">
+            <div class="mining-stat-row"><span>Hashrate:</span><span id="miningHashrate">0 H/s</span></div>
+            <div class="mining-stat-row"><span>Difficulty:</span><span id="miningDifficulty">—</span></div>
+            <div class="mining-stat-row"><span>Block Reward:</span><span id="miningBlockReward">—</span></div>
+            <div class="mining-stat-row"><span>Threads Active:</span><span id="miningActiveThreads">—</span></div>
+          </div>
+          <div class="mining-btn-row">
+            <button class="btn btn-primary" id="btnStartMining">&#9881; Start Mining</button>
+            <button class="btn btn-ghost" id="btnStopMining" disabled>Stop Mining</button>
+          </div>
+          <div class="form-message" id="miningMessage"></div>
+        </div>
+        <div class="card">
+          <h3>Wallet diagnostics</h3>
+          <p class="text-muted">Shows wallet RPC status, sync height, daemon URL, and USDm balance response.</p>
+          <button class="btn btn-ghost" id="btnDiagnostics">Run diagnostics</button>
+          <pre class="diagnostics-output hidden" id="diagnosticsOutput"></pre>
+        </div>
+      </section>
+    </main>
+  </div>
+  <div class="modal hidden" id="swapModal" role="dialog" aria-modal="true" aria-labelledby="swapModalTitle">
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-content swap-modal">
+      <div class="modal-header">
+        <div>
+          <h3 id="swapModalTitle">Swap</h3>
+          <p class="text-muted small">Live pricing, deposits, and automatic payouts.</p>
+        </div>
+        <button class="btn btn-ghost btn-sm" id="swapModalClose">Close</button>
+      </div>
+      <div class="swap-asset-row">
+        <div class="swap-asset">
+          <label>From</label>
+          <select id="swapFromAsset" class="input">
+            <option value="BTC">BTC</option>
+            <option value="XMR">XMR</option>
+            <option value="USDm">USDm</option>
+          </select>
+        </div>
+        <button class="swap-flip" id="swapFlipBtn" title="Flip swap">⇅</button>
+        <div class="swap-asset">
+          <label>To</label>
+          <select id="swapToAsset" class="input">
+            <option value="USDm">USDm</option>
+            <option value="BTC">BTC</option>
+            <option value="XMR">XMR</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group">
+        <label id="swapAmountLabel">Amount</label>
+        <input type="text" id="swapAmount" placeholder="0.00" class="input" />
+      </div>
+      <div class="swap-quote">
+        <div>
+          <span class="text-muted small">Live price</span>
+          <div id="swapPrice" class="swap-value">—</div>
+          <div id="swapPriceMeta" class="text-muted small">—</div>
+        </div>
+        <div>
+          <span class="text-muted small">Estimated output</span>
+          <div id="swapQuote" class="swap-value">—</div>
+        </div>
+      </div>
+      <div class="swap-balance" id="swapUsdmBalance">USDm balance: —</div>
+      <div class="form-group" id="swapUsdmAddressGroup">
+        <label>Your USDm wallet address</label>
+        <input type="text" id="swapUsdmAddress" placeholder="MJ..." class="input" />
+      </div>
+      <div class="form-group hidden" id="swapPayoutAddressGroup">
+        <label id="swapPayoutLabel">Your payout address</label>
+        <input type="text" id="swapPayoutAddress" placeholder="Address" class="input" />
+      </div>
+      <div class="swap-deposit hidden" id="swapDepositSection">
+        <div class="swap-deposit-details">
+          <div class="swap-deposit-label">Deposit to</div>
+          <div class="swap-deposit-address" id="swapDepositAddress">—</div>
+          <div class="swap-deposit-amount" id="swapDepositAmount">—</div>
+        </div>
+        <canvas id="swapQrCanvas" width="160" height="160" aria-label="Deposit address QR code"></canvas>
+      </div>
+      <div class="swap-status" id="swapStatus">Ready.</div>
+      <button class="btn btn-primary btn-block" id="swapActionBtn">Generate swap</button>
+      <button class="btn btn-ghost btn-block hidden" id="swapNewBtn">Start new swap</button>
+      <p class="text-muted small" id="swapDisclaimer">BTC and XMR deposits are confirmed on-chain before USDm is minted. USDm burns are confirmed before payouts.</p>
+    </div>
+  </div>
+  <script src="welcome-bg.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

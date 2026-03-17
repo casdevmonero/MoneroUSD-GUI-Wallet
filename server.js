@@ -1,0 +1,682 @@
+/**
+ * Serve the wallet UI in the browser and proxy JSON-RPC to per-user USDm-wallet-rpc instances.
+ * Each browser session gets its own wallet-rpc process on a unique port.
+ * Run: node server.js
+ * Then open: http://localhost:3000
+ */
+const http = require('http');
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+const { spawn } = require('child_process');
+
+const PORT = parseInt(process.env.PORT || '3000', 10);
+const LOCALHOST = '127.0.0.1';
+const DAEMON_RPC = process.env.DAEMON_RPC_URL || 'http://' + LOCALHOST + ':17750';
+
+// Wallet-rpc binary and config
+const WALLET_RPC_BIN = process.env.WALLET_RPC_BIN
+  || 'USDm-wallet-rpc';
+const DAEMON_ADDRESS = 'http://' + LOCALHOST + ':17750';
+
+// Per-user session config
+const SESSION_PORT_START = 28000;
+const SESSION_PORT_END   = 28999;
+const MAX_SESSIONS       = 200;
+const SESSION_IDLE_MS    = 30 * 60 * 1000;  // 30 min idle timeout
+const SESSION_DIR_BASE   = '/tmp/musd-sessions';
+const CLEANUP_INTERVAL   = 60 * 1000;       // check every 60s
+const SESSION_MAX_AGE_MS = 12 * 60 * 60 * 1000; // 12 hr absolute session timeout
+
+// Rate limiting: per-IP session creation (max 3 sessions per IP per minute)
+const RATE_LIMIT_WINDOW  = 60 * 1000;
+const RATE_LIMIT_MAX     = 3;
+const rateLimitMap = new Map(); // ip -> { count, resetAt }
+
+function checkRateLimit(ip) {
+  const now = Date.now();
+  let entry = rateLimitMap.get(ip);
+  if (!entry || now > entry.resetAt) {
+    entry = { count: 0, resetAt: now + RATE_LIMIT_WINDOW };
+    rateLimitMap.set(ip, entry);
+  }
+  entry.count++;
+  return entry.count <= RATE_LIMIT_MAX;
+}
+
+// Periodic rate-limit map cleanup
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, entry] of rateLimitMap) {
+    if (now > entry.resetAt) rateLimitMap.delete(ip);
+  }
+}, 5 * 60 * 1000);
+
+const MIMES = {
+  '.html': 'text/html',
+  '.css': 'text/css',
+  '.js': 'application/javascript',
+  '.ico': 'image/x-icon',
+  '.png': 'image/png',
+  '.svg': 'image/svg+xml',
+};
+
+const rendererDir = path.join(__dirname, 'renderer');
+
+// Read-only RPC methods safe to run concurrently
+const CONCURRENT_RPC_METHODS = new Set([
+  'get_version', 'get_address', 'get_balance', 'get_height',
+  'get_accounts', 'get_transfers', 'get_transfer_by_txid',
+  'query_key', 'get_languages', 'get_attribute',
+  'auto_refresh',
+]);
+
+// ===== Session Manager =====
+
+const sessions = new Map();    // token -> SessionState
+const usedPorts = new Set();
+
+function allocatePort() {
+  for (let p = SESSION_PORT_START; p <= SESSION_PORT_END; p++) {
+    if (!usedPorts.has(p)) {
+      usedPorts.add(p);
+      return p;
+    }
+  }
+  return null;
+}
+
+function releasePort(port) {
+  usedPorts.delete(port);
+}
+
+function parseCookie(req, name) {
+  const hdr = req.headers.cookie || '';
+  const match = hdr.match(new RegExp('(?:^|;\\s*)' + name + '=([^;]+)'));
+  return match ? match[1] : null;
+}
+
+function setSessionCookie(res, token) {
+  const secure = process.env.NODE_ENV === 'production' ? ' Secure;' : '';
+  res.setHeader('Set-Cookie',
+    'musd_session=' + token + '; Path=/; HttpOnly; SameSite=Strict;' + secure + ' Max-Age=3600');
+}
+
+function walletRpc(port, method, params, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const body = JSON.stringify({ jsonrpc: '2.0', id: '0', method, params: params || {} });
+    const opts = {
+      hostname: LOCALHOST, port, path: '/json_rpc', method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+    };
+    const req = http.request(opts, (res) => {
+      let buf = '';
+      res.on('data', c => buf += c);
+      res.on('end', () => { try { resolve(JSON.parse(buf)); } catch (_) { resolve(null); } });
+    });
+    req.setTimeout(timeoutMs || 5000, () => { req.destroy(); reject(new Error('timeout')); });
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+}
+
+async function waitForWalletRpc(port, maxRetries) {
+  for (let i = 0; i < (maxRetries || 20); i++) {
+    try {
+      const r = await walletRpc(port, 'get_version', {}, 2000);
+      if (r && r.result) return true;
+    } catch (_) {}
+    await new Promise(ok => setTimeout(ok, 500));
+  }
+  return false;
+}
+
+async function createSession() {
+  if (sessions.size >= MAX_SESSIONS) return null;
+
+  const token = crypto.randomBytes(32).toString('hex');
+  const port = allocatePort();
+  if (!port) return null;
+
+  const walletDir = path.join(SESSION_DIR_BASE, token);
+  fs.mkdirSync(walletDir, { recursive: true, mode: 0o700 });
+
+  const env = Object.assign({}, process.env, {
+    MONEROUSD_ENABLE_FCMP: '1',
+    MONEROUSD_ALLOW_LOW_MIXIN: '1',
+    MONEROUSD_DISABLE_TX_LIMITS: '1',
+  });
+
+  const args = [
+    '--rpc-bind-ip', LOCALHOST,
+    '--rpc-bind-port', String(port),
+    '--disable-rpc-login',
+    '--wallet-dir', walletDir,
+    '--daemon-address', DAEMON_ADDRESS,
+    '--trusted-daemon',
+    '--log-file', path.join(walletDir, 'wallet-rpc.log'),
+    '--log-level', '1',
+  ];
+
+  const proc = spawn(WALLET_RPC_BIN, args, {
+    env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    detached: false,
+  });
+
+  const session = {
+    token,
+    port,
+    process: proc,
+    walletDir,
+    createdAt: Date.now(),
+    lastActivity: Date.now(),
+    state: 'starting',
+    proxyQueue: Promise.resolve(),
+  };
+
+  // Handle unexpected exit
+  proc.on('exit', (code) => {
+    if (session.state !== 'closing') {
+      console.log('  Session wallet-rpc exited unexpectedly (port ' + port + ', code ' + code + ')');
+      session.state = 'dead';
+    }
+  });
+
+  proc.on('error', (err) => {
+    console.log('  Session wallet-rpc spawn error: ' + err.message);
+    session.state = 'dead';
+  });
+
+  // Capture stderr for debugging
+  proc.stderr.on('data', () => {}); // drain
+  proc.stdout.on('data', () => {}); // drain
+
+  sessions.set(token, session);
+
+  // Wait for it to be ready (non-blocking from caller's perspective)
+  const ready = await waitForWalletRpc(port, 20);
+  if (ready) {
+    session.state = 'ready';
+    console.log('  Session started: port ' + port + ' (active: ' + sessions.size + ')');
+  } else {
+    console.log('  Session wallet-rpc failed to start on port ' + port);
+    await destroySession(token);
+    return null;
+  }
+
+  return session;
+}
+
+async function destroySession(token) {
+  const session = sessions.get(token);
+  if (!session) return;
+
+  session.state = 'closing';
+  sessions.delete(token);
+
+  // Try graceful close_wallet
+  try {
+    await walletRpc(session.port, 'close_wallet', {}, 3000);
+  } catch (_) {}
+
+  // Kill process
+  try {
+    session.process.kill('SIGTERM');
+    // Force kill after 5s
+    setTimeout(() => {
+      try { session.process.kill('SIGKILL'); } catch (_) {}
+    }, 5000);
+  } catch (_) {}
+
+  // Release port
+  releasePort(session.port);
+
+  // Clean up wallet files
+  setTimeout(() => {
+    try { fs.rmSync(session.walletDir, { recursive: true, force: true }); } catch (_) {}
+  }, 2000);
+
+  console.log('  Session destroyed: port ' + session.port + ' (active: ' + sessions.size + ')');
+}
+
+function getSession(req) {
+  const token = parseCookie(req, 'musd_session');
+  if (!token) return null;
+  const session = sessions.get(token);
+  if (!session) return null;
+  session.lastActivity = Date.now();
+  return session;
+}
+
+// Periodic idle session cleanup
+setInterval(() => {
+  const now = Date.now();
+  for (const [token, session] of sessions) {
+    if (now - session.lastActivity > SESSION_IDLE_MS) {
+      console.log('  Session idle timeout: port ' + session.port);
+      destroySession(token);
+    } else if (now - session.createdAt > SESSION_MAX_AGE_MS) {
+      console.log('  Session absolute timeout: port ' + session.port);
+      destroySession(token);
+    }
+  }
+}, CLEANUP_INTERVAL);
+
+// ===== HTTP Server =====
+
+function parseTarget(target) {
+  if (!target || typeof target !== 'string') return null;
+  target = target.trim();
+  if (!target.startsWith('http://') && !target.startsWith('https://')) return null;
+  try {
+    const u = new URL(target);
+    const host = (u.hostname || '').toLowerCase();
+    if (host !== LOCALHOST && host !== '::1' && host !== 'localhost') return null;
+    return { hostname: u.hostname, port: u.port || (u.protocol === 'https:' ? 443 : 80), protocol: u.protocol };
+  } catch (_) {
+    return null;
+  }
+}
+
+function sendJson(res, status, obj) {
+  res.writeHead(status, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(obj));
+}
+
+const server = http.createServer(async (req, res) => {
+
+  // --- Session API ---
+
+  if (req.method === 'POST' && req.url === '/api/session') {
+    // Rate limit session creation per IP
+    const clientIp = req.headers['x-forwarded-for']?.split(',')[0]?.trim()
+      || req.headers['x-real-ip']
+      || req.socket.remoteAddress || '';
+    if (!checkRateLimit(clientIp)) {
+      return sendJson(res, 429, { error: 'Too many sessions. Please wait a moment and try again.' });
+    }
+    // Create a new session (or return existing)
+    let existing = getSession(req);
+    if (existing && existing.state === 'ready') {
+      return sendJson(res, 200, { status: 'ready', port: existing.port });
+    }
+    if (existing && existing.state === 'starting') {
+      return sendJson(res, 200, { status: 'starting' });
+    }
+    // Dead or no session — create new
+    if (existing && existing.state === 'dead') {
+      await destroySession(existing.token);
+    }
+    const session = await createSession();
+    if (!session) {
+      return sendJson(res, 503, { error: 'Server at capacity. Please try again later.' });
+    }
+    setSessionCookie(res, session.token);
+    return sendJson(res, 200, { status: session.state });
+  }
+
+  if (req.method === 'GET' && req.url === '/api/session/status') {
+    const session = getSession(req);
+    if (!session) return sendJson(res, 200, { status: 'none' });
+    return sendJson(res, 200, { status: session.state });
+  }
+
+  if (req.method === 'DELETE' && req.url === '/api/session') {
+    const session = getSession(req);
+    if (session) await destroySession(session.token);
+    // Clear cookie
+    res.setHeader('Set-Cookie', 'musd_session=; Path=/; HttpOnly; Max-Age=0');
+    return sendJson(res, 200, { status: 'closed' });
+  }
+
+  // Handle beacon (POST with action:close) for page unload
+  if (req.method === 'POST' && req.url === '/api/session/close') {
+    const session = getSession(req);
+    if (session) destroySession(session.token); // fire-and-forget
+    res.setHeader('Set-Cookie', 'musd_session=; Path=/; HttpOnly; Max-Age=0');
+    return sendJson(res, 200, { status: 'closed' });
+  }
+
+  // --- Wallet JSON-RPC proxy (per-session) ---
+
+  if (req.method === 'POST' && req.url === '/json_rpc') {
+    let body = '';
+    let bodySize = 0;
+    const MAX_BODY = 5 * 1024 * 1024;
+    req.on('data', (chunk) => {
+      bodySize += chunk.length;
+      if (bodySize > MAX_BODY) { req.destroy(); res.writeHead(413); res.end('Request too large'); return; }
+      body += chunk;
+    });
+    req.on('end', async () => {
+      // Get or create session
+      let session = getSession(req);
+      if (!session || session.state === 'dead') {
+        if (session) await destroySession(session.token);
+        session = await createSession();
+        if (!session) {
+          return sendJson(res, 503, { error: { message: 'Server at capacity. Please try again later.' } });
+        }
+        setSessionCookie(res, session.token);
+      }
+
+      if (session.state === 'starting') {
+        return sendJson(res, 503, { error: { message: 'Wallet engine is starting. Please wait a moment and try again.' } });
+      }
+
+      if (session.state !== 'ready') {
+        return sendJson(res, 502, { error: { message: 'Wallet session is not available. Please refresh the page.' } });
+      }
+
+      session.lastActivity = Date.now();
+
+      let method = '';
+      try {
+        const parsedBody = JSON.parse(body || '{}');
+        method = (parsedBody.method || '').toString();
+      } catch (_) {}
+
+      const PROXY_TIMEOUT_MS = method === 'refresh' ? 600000
+        : method === 'rescan_blockchain' ? 300000
+        : method === 'restore_deterministic_wallet' ? 120000
+        : method === 'set_daemon' ? 10000
+        : 90000;
+
+      const opts = {
+        hostname: LOCALHOST,
+        port: session.port,
+        path: '/json_rpc',
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+      };
+
+      let responded = false;
+      function send502(msg) {
+        if (responded) return;
+        responded = true;
+        res.writeHead(502, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: msg } }));
+      }
+
+      const doProxy = () =>
+        new Promise((resolve) => {
+          const proxy = http.request(opts, (rpcRes) => {
+            let buf = '';
+            rpcRes.on('error', () => {
+              if (!responded) send502('Wallet RPC connection error.');
+              resolve();
+            });
+            rpcRes.on('data', (chunk) => (buf += chunk));
+            rpcRes.on('end', () => {
+              if (responded) { resolve(); return; }
+              responded = true;
+              try {
+                // Preserve uint64 precision
+                const raw = (buf || '')
+                  .replace(/"balance"\s*:\s*(\d+)/g, '"balance":"$1"')
+                  .replace(/"unlocked_balance"\s*:\s*(\d+)/g, '"unlocked_balance":"$1"')
+                  .replace(/"amount"\s*:\s*(\d+)/g, '"amount":"$1"');
+                const data = JSON.parse(raw);
+                // Ensure session cookie is set on RPC responses too
+                const headers = { 'Content-Type': 'application/json' };
+                if (!parseCookie(req, 'musd_session')) {
+                  headers['Set-Cookie'] = 'musd_session=' + session.token + '; Path=/; HttpOnly; SameSite=Strict; Max-Age=3600';
+                }
+                res.writeHead(rpcRes.statusCode, headers);
+                res.end(JSON.stringify(data));
+              } catch (_) {
+                res.writeHead(rpcRes.statusCode, { 'Content-Type': 'application/json' });
+                res.end(buf);
+              }
+              resolve();
+            });
+          });
+          proxy.setTimeout(PROXY_TIMEOUT_MS, () => {
+            proxy.destroy();
+            send502(method === 'refresh'
+              ? 'Sync is taking longer than ' + (PROXY_TIMEOUT_MS / 60000) + ' minutes. Try again later.'
+              : 'Wallet RPC timed out. Please refresh the page.');
+            resolve();
+          });
+          proxy.on('error', (e) => {
+            const msg = (e && e.message) || '';
+            send502('Wallet RPC error: ' + msg + '. Please refresh the page to start a new session.');
+            resolve();
+          });
+          proxy.write(body);
+          proxy.end();
+        });
+
+      // Serialize mutating requests per-session; read-only run concurrently
+      if (CONCURRENT_RPC_METHODS.has(method)) {
+        doProxy();
+      } else {
+        session.proxyQueue = session.proxyQueue.then(doProxy);
+      }
+    });
+    return;
+  }
+
+  // --- Daemon RPC proxy (shared, not per-session) ---
+
+  if (req.method === 'POST' && req.url === '/daemon_rpc') {
+    let body = '';
+    let bodySize = 0;
+    const MAX_BODY = 5 * 1024 * 1024;
+    req.on('data', (chunk) => {
+      bodySize += chunk.length;
+      if (bodySize > MAX_BODY) { req.destroy(); res.writeHead(413); res.end('Request too large'); return; }
+      body += chunk;
+    });
+    req.on('end', () => {
+      const dParsed = parseTarget(DAEMON_RPC) || { hostname: LOCALHOST, port: '17750', protocol: 'http:' };
+      const opts = {
+        hostname: dParsed.hostname,
+        port: dParsed.port,
+        path: '/json_rpc',
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+      };
+      const proxy = http.request(opts, (rpcRes) => {
+        let buf = '';
+        rpcRes.on('data', (chunk) => (buf += chunk));
+        rpcRes.on('end', () => {
+          res.writeHead(rpcRes.statusCode, { 'Content-Type': 'application/json' });
+          res.end(buf);
+        });
+      });
+      proxy.setTimeout(30000, () => { proxy.destroy(); res.writeHead(502, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: { message: 'Daemon RPC timed out' } })); });
+      proxy.on('error', (e) => { res.writeHead(502, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: { message: 'Daemon unreachable: ' + (e.message || '') } })); });
+      proxy.write(body);
+      proxy.end();
+    });
+    return;
+  }
+
+  // --- Mining REST proxy (shared) ---
+
+  const miningRestPaths = ['/start_mining', '/stop_mining', '/mining_status'];
+  if (miningRestPaths.includes(req.url.split('?')[0])) {
+    let body = '';
+    req.on('data', (chunk) => (body += chunk));
+    req.on('end', () => {
+      const dParsed = parseTarget(DAEMON_RPC) || { hostname: LOCALHOST, port: '17750', protocol: 'http:' };
+      const opts = {
+        hostname: dParsed.hostname,
+        port: dParsed.port,
+        path: req.url,
+        method: req.method,
+        headers: { 'Content-Type': 'application/json' },
+      };
+      if (body) opts.headers['Content-Length'] = Buffer.byteLength(body);
+      const proxy = http.request(opts, (rpcRes) => {
+        let buf = '';
+        rpcRes.on('data', (chunk) => (buf += chunk));
+        rpcRes.on('end', () => {
+          const origin = req.headers.origin || '';
+          const allowedOrigin = /^https?:\/\/(localhost|.*\.monerousd\.org|monerousd\.org)(:\d+)?$/.test(origin) || origin.match(new RegExp('^https?:\\/\\/' + LOCALHOST.replace(/\./g, '\\.') + '(:\\d+)?$')) ? origin : '';
+          const corsHeaders = { 'Content-Type': 'application/json' };
+          if (allowedOrigin) corsHeaders['Access-Control-Allow-Origin'] = allowedOrigin;
+          res.writeHead(rpcRes.statusCode || 200, corsHeaders);
+          res.end(buf);
+        });
+      });
+      proxy.setTimeout(15000, () => { proxy.destroy(); res.writeHead(502, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Daemon timeout' })); });
+      proxy.on('error', (e) => { res.writeHead(502, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Daemon unreachable: ' + e.message })); });
+      if (body) proxy.write(body);
+      proxy.end();
+    });
+    return;
+  }
+
+  // --- Static files ---
+
+  let urlPath = req.url.split('?')[0];
+  let file = urlPath === '/' ? 'index.html' : urlPath.replace(/^\/+/, '');
+  file = path.resolve(rendererDir, path.normalize(file).replace(/^(\.\.(\/|\\|$))+/, ''));
+  if (!file.startsWith(path.resolve(rendererDir))) {
+    res.writeHead(403);
+    res.end();
+    return;
+  }
+  fs.readFile(file, (err, data) => {
+    if (err) {
+      res.writeHead(404);
+      res.end('Not found');
+      return;
+    }
+    const ext = path.extname(file);
+    res.setHeader('Content-Type', MIMES[ext] || 'application/octet-stream');
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    res.end(data);
+  });
+});
+
+// ===== Graceful shutdown =====
+
+async function shutdownAll() {
+  console.log('\n  Shutting down all sessions...');
+  const promises = [];
+  for (const token of sessions.keys()) {
+    promises.push(destroySession(token));
+  }
+  await Promise.all(promises);
+  process.exit(0);
+}
+
+process.on('SIGTERM', shutdownAll);
+process.on('SIGINT', shutdownAll);
+
+// ===== Start server =====
+
+const HOST = process.env.HOST || '0.0.0.0';
+server.listen(PORT, HOST, () => {
+  console.log('');
+  console.log('  MoneroUSD Wallet (browser) — per-user wallet-rpc');
+  console.log('  Open in your browser:  http://localhost:' + PORT);
+  console.log('  Daemon RPC proxy:      ' + DAEMON_RPC);
+  console.log('  Session ports:         ' + SESSION_PORT_START + '-' + SESSION_PORT_END);
+  console.log('  Max sessions:          ' + MAX_SESSIONS);
+  console.log('  Idle timeout:          ' + (SESSION_IDLE_MS / 60000) + ' min');
+  console.log('');
+  // Ensure session dir exists
+  fs.mkdirSync(SESSION_DIR_BASE, { recursive: true, mode: 0o700 });
+  startMempoolMiner();
+});
+
+// --- Auto-mine: poll daemon mempool every 2s, mine 1 block when txs are pending ---
+const MINE_POLL_MS = 2000;
+let miningInProgress = false;
+
+function daemonRpc(method, params) {
+  return new Promise((resolve, reject) => {
+    const dParsed = parseTarget(DAEMON_RPC) || { hostname: LOCALHOST, port: '17750', protocol: 'http:' };
+    const body = JSON.stringify({ jsonrpc: '2.0', id: '0', method, params: params || {} });
+    const opts = {
+      hostname: dParsed.hostname, port: dParsed.port, path: '/json_rpc', method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+    };
+    const req = http.request(opts, (res) => {
+      let buf = '';
+      res.on('data', (c) => (buf += c));
+      res.on('end', () => { try { resolve(JSON.parse(buf)); } catch (_) { resolve(null); } });
+    });
+    req.setTimeout(10000, () => { req.destroy(); reject(new Error('timeout')); });
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+}
+
+const MINER_ADDRESS = process.env.MINER_ADDRESS || '';
+
+function daemonRest(urlPath, body) {
+  return new Promise((resolve, reject) => {
+    const dParsed = parseTarget(DAEMON_RPC) || { hostname: LOCALHOST, port: '17750', protocol: 'http:' };
+    const data = body ? JSON.stringify(body) : '';
+    const opts = {
+      hostname: dParsed.hostname, port: dParsed.port, path: urlPath,
+      method: body ? 'POST' : 'GET',
+      headers: body ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) } : {},
+    };
+    const req = http.request(opts, (res) => {
+      let buf = '';
+      res.on('data', (c) => (buf += c));
+      res.on('end', () => { try { resolve(JSON.parse(buf)); } catch (_) { resolve(null); } });
+    });
+    req.setTimeout(10000, () => { req.destroy(); reject(new Error('timeout')); });
+    req.on('error', reject);
+    if (data) req.write(data);
+    req.end();
+  });
+}
+
+async function checkMempoolAndMine() {
+  if (miningInProgress || !MINER_ADDRESS) return;
+  try {
+    const poolCheck = await daemonRest('/get_transaction_pool');
+    const txCount = (poolCheck && poolCheck.transactions && poolCheck.transactions.length) || 0;
+    if (txCount === 0) return;
+
+    miningInProgress = true;
+    console.log('  Auto-mine: ' + txCount + ' tx(s) in mempool, mining…');
+
+    const info = await daemonRpc('get_info', {});
+    const startHeight = (info && info.result && info.result.height) || 0;
+
+    await daemonRest('/start_mining', {
+      miner_address: MINER_ADDRESS, threads_count: 1,
+      do_background_mining: false, ignore_battery: true,
+    });
+
+    let mined = false;
+    for (let i = 0; i < 10; i++) {
+      await new Promise((ok) => setTimeout(ok, 500));
+      const cur = await daemonRpc('get_info', {});
+      const curHeight = (cur && cur.result && cur.result.height) || 0;
+      if (curHeight > startHeight) {
+        console.log('  Auto-mine: block mined at height ' + curHeight);
+        mined = true;
+        break;
+      }
+    }
+
+    await daemonRest('/stop_mining').catch(() => {});
+    if (!mined) console.log('  Auto-mine: mining started but no new block detected');
+  } catch (e) {
+    daemonRest('/stop_mining').catch(() => {});
+  } finally {
+    miningInProgress = false;
+  }
+}
+
+function startMempoolMiner() {
+  setInterval(checkMempoolAndMine, MINE_POLL_MS);
+  console.log('  Auto-mine: polling mempool every ' + (MINE_POLL_MS / 1000) + 's');
+}

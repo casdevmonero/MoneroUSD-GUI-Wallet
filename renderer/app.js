@@ -1549,6 +1549,31 @@
       document.getElementById('receiveAddress').textContent = addr || 'Connect wallet RPC in Settings';
       const canvas = document.getElementById('receiveQrCanvas');
       renderQrToCanvas(addr || '', canvas);
+      // Migrate swap history from filename-based keys to the real wallet address
+      if (addr) {
+        try {
+          const history = loadSwapHistory();
+          const fallbackKeys = [getActiveWalletName(), getPrimaryWallet(), '_default'].filter(Boolean);
+          let migrated = false;
+          for (const oldKey of fallbackKeys) {
+            if (oldKey === addr) continue;
+            if (Array.isArray(history[oldKey]) && history[oldKey].length > 0) {
+              if (!Array.isArray(history[addr])) history[addr] = [];
+              for (const rec of history[oldKey]) {
+                const exists = history[addr].some((s) => s.swap_id === rec.swap_id);
+                if (!exists) history[addr].push(rec);
+              }
+              delete history[oldKey];
+              migrated = true;
+            }
+          }
+          if (migrated) {
+            history[addr].sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
+            if (history[addr].length > 50) history[addr] = history[addr].slice(0, 50);
+            saveSwapHistory(history);
+          }
+        } catch (_) {}
+      }
     } catch (e) {
       currentWalletAddress = '';
       document.getElementById('receiveAddress').textContent = 'Connect wallet RPC in Settings';
@@ -2158,8 +2183,12 @@
     let lastPriceAt = null;
 
     function getSwapWalletKey() {
-      return currentWalletAddress || getActiveWalletName() || '_default';
+      // Always prefer the deterministic wallet address (derived from seed).
+      // This ensures swap history persists across sessions even if wallet
+      // file names differ, as long as the same seed is used.
+      return currentWalletAddress || getPrimaryWallet() || getActiveWalletName() || '_default';
     }
+
 
     function swapStatusLabel(status) {
       const map = {
@@ -2641,6 +2670,57 @@
     // Render swap history on init and auto-resume any pending swaps
     renderSwapHistory();
     autoResumePendingSwaps();
+
+    // Recover swap history from server when wallet address is available
+    // (handles case where user restores from seed on a new device)
+    async function syncSwapHistoryFromServer() {
+      const addr = currentWalletAddress;
+      if (!addr) return;
+      try {
+        const res = await swapFetch(`/api/swaps?wallet=${encodeURIComponent(addr)}`);
+        if (res && Array.isArray(res.swaps) && res.swaps.length > 0) {
+          const walletKey = getSwapWalletKey();
+          let changed = false;
+          for (const serverSwap of res.swaps) {
+            const record = {
+              swap_id: serverSwap.id,
+              direction: serverSwap.direction,
+              asset: serverSwap.asset,
+              status: serverSwap.status,
+              amount: serverSwap.amount,
+              amount_usdm: serverSwap.amount_usdm,
+              deposit_address: serverSwap.deposit_address,
+              burn_address: serverSwap.burn_address,
+              payout_address: serverSwap.payout_address,
+              expected_usdm: serverSwap.expected_usdm,
+              expected_crypto: serverSwap.expected_crypto,
+              price_usd: serverSwap.price_usd,
+              minted_tx: serverSwap.minted_tx,
+              payout_tx: serverSwap.payout_tx,
+              burn_tx: serverSwap.burn_tx,
+              error: serverSwap.error,
+              created_at: serverSwap.created_at,
+            };
+            // Only add if not already in local history
+            const local = getSwapsForWallet(walletKey);
+            if (!local.some((s) => s.swap_id === record.swap_id)) {
+              saveSwapRecord(walletKey, record);
+              changed = true;
+            } else {
+              // Update status if server has newer info
+              const existing = local.find((s) => s.swap_id === record.swap_id);
+              if (existing && existing.status !== record.status) {
+                saveSwapRecord(walletKey, record);
+                changed = true;
+              }
+            }
+          }
+          if (changed) renderSwapHistory();
+        }
+      } catch (_) {} // Non-critical — local history still works
+    }
+    // Run after a short delay to not block UI initialization
+    setTimeout(syncSwapHistoryFromServer, 3000);
 
     function autoResumePendingSwaps() {
       const swaps = getSwapsForWallet(getSwapWalletKey());

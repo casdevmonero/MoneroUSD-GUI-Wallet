@@ -1566,6 +1566,9 @@
       const result = await rpc('get_address', { account_index: 0 });
       const addr = result.address || result.addresses?.[0]?.address || '';
       currentWalletAddress = addr || '';
+      if (addr && typeof _swapSyncSucceeded !== 'undefined' && !_swapSyncSucceeded) {
+        syncSwapHistoryFromServer();
+      }
       document.getElementById('receiveAddress').textContent = addr || 'Connect wallet RPC in Settings';
       const canvas = document.getElementById('receiveQrCanvas');
       renderQrToCanvas(addr || '', canvas);
@@ -1913,10 +1916,13 @@
         const subAddr = sub && (sub.address || sub.addresses?.[0]?.address) ? (sub.address || sub.addresses?.[0]?.address) : '';
         if (subAddr) {
           currentWalletAddress = subAddr;
+          if (typeof _swapSyncSucceeded !== 'undefined' && !_swapSyncSucceeded) {
+            syncSwapHistoryFromServer();
+          }
           document.getElementById('receiveAddress').textContent = subAddr;
         } else {
           currentWalletAddress = '';
-          await refreshAddress().catch(() => {});
+          await refreshAddress().catch(() => {}); // refreshAddress will trigger sync if address found
         }
         applyStoredBalanceForWallet(filename);
         await configureWalletRpcMoneroStyle().catch(() => {});
@@ -2698,11 +2704,22 @@
     // Recover swap history from server when wallet address is available
     // (handles case where user restores from seed on a new device)
     let _swapSyncRetries = 0;
+    let _swapSyncSucceeded = false;
     async function syncSwapHistoryFromServer() {
-      const addr = currentWalletAddress;
+      // Use fallback chain: currentWalletAddress, or extract address from local swap records
+      let addr = currentWalletAddress;
       if (!addr) {
-        // Wallet address not yet available — retry up to 10 times (30s total)
-        if (_swapSyncRetries < 10) {
+        // Try to find a USDm address from existing local swap history
+        const walletKey = getSwapWalletKey();
+        const localSwaps = getSwapsForWallet(walletKey);
+        for (const s of localSwaps) {
+          if (s.payout_address && s.payout_address.length > 20) { addr = s.payout_address; break; }
+          if (s.deposit_address && s.deposit_address.length > 20) { addr = s.deposit_address; break; }
+        }
+      }
+      if (!addr) {
+        // Wallet address not yet available — retry up to 20 times (60s total)
+        if (_swapSyncRetries < 20) {
           _swapSyncRetries++;
           setTimeout(syncSwapHistoryFromServer, 3000);
         }
@@ -2749,6 +2766,10 @@
           }
           if (changed) renderSwapHistory();
         }
+        _swapSyncSucceeded = true;
+        // Always render and auto-resume after sync, even if no new records from server
+        renderSwapHistory();
+        autoResumePendingSwaps();
       } catch (_) {} // Non-critical — local history still works
     }
     // Run after a short delay to not block UI initialization
@@ -3126,6 +3147,9 @@
         if (r && r.address) {
           currentWalletAddress = r.address;
           addr = r.address;
+          if (typeof _swapSyncSucceeded !== 'undefined' && !_swapSyncSucceeded) {
+            syncSwapHistoryFromServer();
+          }
         }
       } catch (_) {}
     }

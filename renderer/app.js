@@ -3539,49 +3539,94 @@
   }
 
   function bindSettings() {
-    const browserNotice = document.getElementById('browserModeNotice');
+    const relayPanel = document.getElementById('relayStatusPanel');
+    const customNodePanel = document.getElementById('customNodePanel');
     const desktopSettings = document.getElementById('desktopRpcSettings');
+    const lightWalletSettings = document.getElementById('lightWalletSettings');
     const customNodeToggle = document.getElementById('useCustomNodeToggle');
+    const localNodeCard = document.getElementById('localNodeCard');
+    const localNodeRadio = document.getElementById('customNodeLocal');
+    const vpsNodeRadio = document.getElementById('customNodeVps');
+    const localNodeHint = document.getElementById('localNodeHint');
+    const vpsNodeHint = document.getElementById('vpsNodeHint');
+    const relayIndicator = document.getElementById('relayIndicator');
+    const relayStatusLabel = document.getElementById('relayStatusLabel');
 
     // Determine if currently using relay (non-localhost RPC)
     const currentRpc = storageGet(RPC_STORAGE_KEY) || DEFAULT_RPC;
-    const usingRelay = !/127\.0\.0\.1|localhost/i.test(currentRpc);
+    const usingRelay = !/127\.0\.0\.1|localhost/i.test(currentRpc) || isBrowser;
 
-    // Show relay-connected notice for both browser and desktop modes
-    if (browserNotice) browserNotice.classList.remove('hidden');
-    // Hide RPC fields by default when using relay — toggle to reveal
-    if (desktopSettings && usingRelay) desktopSettings.classList.add('hidden');
+    // In browser mode: hide local node card (desktop-only), hide light wallet fields, hide swap backend
+    if (isBrowser) {
+      if (localNodeCard) localNodeCard.classList.add('hidden');
+      if (lightWalletSettings) lightWalletSettings.classList.add('hidden');
+      if (desktopSettings) desktopSettings.classList.add('hidden');
+    } else {
+      // Desktop mode: show swap backend and light wallet settings
+      if (desktopSettings) desktopSettings.classList.remove('hidden');
+      if (lightWalletSettings) lightWalletSettings.classList.remove('hidden');
+    }
+
+    // Update relay status indicator
+    function updateRelayStatus(connected) {
+      if (relayIndicator) relayIndicator.style.color = connected ? '#4caf50' : '#f44336';
+      if (relayStatusLabel) relayStatusLabel.textContent = connected
+        ? 'Connected to MoneroUSD Relay'
+        : 'Disconnected — using custom node';
+    }
+    updateRelayStatus(usingRelay && !customNodeToggle?.checked);
+
     // Pre-check the toggle if already using custom node
-    if (customNodeToggle && !usingRelay) customNodeToggle.checked = true;
+    if (customNodeToggle && !usingRelay) {
+      customNodeToggle.checked = true;
+      if (customNodePanel) customNodePanel.classList.remove('hidden');
+    }
 
-    // Wire up the toggle
+    // Radio button: switch between local and VPS hints/placeholders
+    function updateCustomNodeType() {
+      const isVps = vpsNodeRadio && vpsNodeRadio.checked;
+      if (localNodeHint) localNodeHint.classList.toggle('hidden', isVps);
+      if (vpsNodeHint) vpsNodeHint.classList.toggle('hidden', !isVps);
+      const rpcEl = document.getElementById('rpcUrl');
+      const daemonEl = document.getElementById('daemonUrl');
+      if (isVps) {
+        if (rpcEl) rpcEl.placeholder = 'http://your-vps-ip:27750';
+        if (daemonEl) daemonEl.placeholder = 'http://your-vps-ip:17750';
+      } else {
+        if (rpcEl) rpcEl.placeholder = 'http://localhost:27750';
+        if (daemonEl) daemonEl.placeholder = 'http://localhost:17750';
+      }
+    }
+    if (localNodeRadio) localNodeRadio.addEventListener('change', updateCustomNodeType);
+    if (vpsNodeRadio) vpsNodeRadio.addEventListener('change', updateCustomNodeType);
+
+    // Wire up the custom node toggle
     if (customNodeToggle) {
       customNodeToggle.addEventListener('change', () => {
-        if (desktopSettings) {
-          desktopSettings.classList.toggle('hidden', !customNodeToggle.checked);
-        }
-        // When toggling off custom node, disconnect and reset to relay defaults
-        if (!customNodeToggle.checked) {
+        const useCustom = customNodeToggle.checked;
+        if (customNodePanel) customNodePanel.classList.toggle('hidden', !useCustom);
+        updateRelayStatus(!useCustom);
+        if (!useCustom) {
+          // Switching back to relay — reset URLs to relay defaults
           setRpcUrl(RELAY_RPC_URL);
           setDaemonUrl(RELAY_DAEMON_URL);
           const rpcEl = document.getElementById('rpcUrl');
           const daemonEl = document.getElementById('daemonUrl');
-          if (rpcEl) rpcEl.value = RELAY_RPC_URL;
-          if (daemonEl) daemonEl.value = RELAY_DAEMON_URL;
+          if (rpcEl) rpcEl.value = '';
+          if (daemonEl) daemonEl.value = '';
         } else {
-          // When toggling on, show empty fields so user can enter their own node details.
-          // Do NOT auto-fill with localhost — user must explicitly enter their node URL.
-          const rpcEl = document.getElementById('rpcUrl');
-          const daemonEl = document.getElementById('daemonUrl');
-          if (rpcEl) { rpcEl.value = ''; rpcEl.placeholder = 'e.g. http://192.0.2.1:27750'; }
-          if (daemonEl) { daemonEl.value = ''; daemonEl.placeholder = 'e.g. http://192.0.2.1:17750'; }
+          updateCustomNodeType();
         }
       });
     }
+
+    // Populate fields with current stored values (only if using custom node)
     const rpcEl = document.getElementById('rpcUrl');
-    if (rpcEl) rpcEl.value = rpcUrl;
     const daemonEl = document.getElementById('daemonUrl');
-    if (daemonEl) daemonEl.value = storageGet(DAEMON_URL_STORAGE_KEY) || DEFAULT_DAEMON_URL;
+    if (!usingRelay) {
+      if (rpcEl) rpcEl.value = currentRpc;
+      if (daemonEl) daemonEl.value = storageGet(DAEMON_URL_STORAGE_KEY) || '';
+    }
     const swapBackendEl = document.getElementById('swapBackendUrl');
     if (swapBackendEl) swapBackendEl.value = storageGet(SWAP_BACKEND_STORAGE_KEY) || DEFAULT_SWAP_BACKEND;
     setLightWalletConfig(storageGet(LIGHT_WALLET_URL_KEY) || '', storageGet(LIGHT_WALLET_TOKEN_KEY) || '', storageGet(LIGHT_WALLET_ENABLED_KEY) === 'true');

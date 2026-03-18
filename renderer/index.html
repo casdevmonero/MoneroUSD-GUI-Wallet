@@ -420,43 +420,70 @@
 
       <section id="pageSettings" class="page">
         <div class="card">
-          <h3>Wallet RPC connection</h3>
-          <!-- Browser mode: auto-connected notice with option to use custom node -->
-          <div id="browserModeNotice" class="hidden" style="padding:12px 16px;background:rgba(255,102,0,.08);border:1px solid rgba(255,102,0,.2);border-radius:8px;margin-bottom:16px">
-            <p style="margin:0 0 8px;font-size:.9rem;color:var(--text)"><strong style="color:var(--accent)">&#x1F310; Connected</strong> &mdash; Auto-connected to MoneroUSD relay network.</p>
-            <p style="margin:0 0 10px;font-size:.82rem;color:var(--text2)">For full sovereignty, run your own USDmd node and wallet-rpc, then enter your custom URLs below.</p>
+          <h3>Network Connection</h3>
+          <!-- Relay status indicator -->
+          <div id="relayStatusPanel" style="padding:14px 16px;background:rgba(255,102,0,.08);border:1px solid rgba(255,102,0,.2);border-radius:8px;margin-bottom:16px">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+              <span id="relayIndicator" style="color:#4caf50;font-size:1.1rem">&#9679;</span>
+              <strong id="relayStatusLabel" style="font-size:.95rem;color:var(--text)">Connected to MoneroUSD Relay</strong>
+            </div>
+            <p style="margin:0 0 10px;font-size:.82rem;color:var(--text2)">Your wallet is securely connected through the MoneroUSD relay network. Each session gets a private, isolated wallet instance.</p>
             <label class="checkbox-row" style="font-size:.85rem;cursor:pointer">
               <input type="checkbox" id="useCustomNodeToggle" />
               <span>Use custom node (advanced)</span>
             </label>
           </div>
-          <div id="desktopRpcSettings">
+          <!-- Custom node options — hidden until toggle is checked -->
+          <div id="customNodePanel" class="hidden" style="padding:14px 16px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.08);border-radius:8px;margin-bottom:16px">
+            <p style="margin:0 0 12px;font-size:.85rem;color:var(--text2)">Disconnect from the relay and connect to your own node. Choose one:</p>
+            <div style="display:flex;gap:10px;margin-bottom:14px">
+              <label class="checkbox-row" style="font-size:.85rem;cursor:pointer;flex:1;padding:10px;background:rgba(255,102,0,.06);border:1px solid rgba(255,102,0,.15);border-radius:6px">
+                <input type="radio" name="customNodeType" id="customNodeLocal" value="local" checked />
+                <span>Local Node</span>
+              </label>
+              <label class="checkbox-row" style="font-size:.85rem;cursor:pointer;flex:1;padding:10px;background:rgba(255,102,0,.06);border:1px solid rgba(255,102,0,.15);border-radius:6px">
+                <input type="radio" name="customNodeType" id="customNodeVps" value="vps" />
+                <span>VPS / Remote Node</span>
+              </label>
+            </div>
+            <div id="localNodeHint" style="margin-bottom:10px">
+              <p style="margin:0 0 8px;font-size:.8rem;color:var(--text2)">Run USDmd and wallet-rpc on your machine, then enter the URLs below.</p>
+            </div>
+            <div id="vpsNodeHint" class="hidden" style="margin-bottom:10px">
+              <p style="margin:0 0 8px;font-size:.8rem;color:var(--text2)">Enter the IP/domain and ports of your remote VPS running USDmd and wallet-rpc.</p>
+            </div>
             <div class="form-group">
               <label>Daemon URL</label>
-              <input type="text" id="daemonUrl" class="input" />
+              <input type="text" id="daemonUrl" class="input" placeholder="http://localhost:17750" />
             </div>
             <div class="form-group">
               <label>Wallet RPC URL</label>
-              <input type="text" id="rpcUrl" class="input" />
+              <input type="text" id="rpcUrl" class="input" placeholder="http://localhost:27750" />
             </div>
           </div>
-          <div class="form-group">
-            <label>Swap backend URL</label>
-            <input type="text" id="swapBackendUrl" value="https://swap.monerousd.org" placeholder="https://swap.monerousd.org" class="input" />
+          <!-- Swap backend — always visible -->
+          <div id="desktopRpcSettings" class="hidden">
+            <div class="form-group">
+              <label>Swap backend URL</label>
+              <input type="text" id="swapBackendUrl" value="https://swap.monerousd.org" placeholder="https://swap.monerousd.org" class="input" />
+            </div>
           </div>
-          <div class="form-group">
-            <label>Light wallet server URL</label>
-            <input type="text" id="lightWalletUrl" placeholder="https://light.monerousd.org" class="input" />
-          </div>
-          <div class="form-group">
-            <label>Light wallet token</label>
-            <input type="password" id="lightWalletToken" placeholder="Required for public server" class="input" />
-          </div>
-          <div class="form-group">
-            <label class="checkbox-row">
-              <input type="checkbox" id="lightWalletEnabled" />
-              <span>Use light wallet server</span>
-            </label>
+          <!-- Light wallet fields — desktop only -->
+          <div id="lightWalletSettings" class="hidden">
+            <div class="form-group">
+              <label>Light wallet server URL</label>
+              <input type="text" id="lightWalletUrl" placeholder="https://light.monerousd.org" class="input" />
+            </div>
+            <div class="form-group">
+              <label>Light wallet token</label>
+              <input type="password" id="lightWalletToken" placeholder="Required for public server" class="input" />
+            </div>
+            <div class="form-group">
+              <label class="checkbox-row">
+                <input type="checkbox" id="lightWalletEnabled" />
+                <span>Use light wallet server</span>
+              </label>
+            </div>
           </div>
           <button class="btn btn-primary" id="btnSaveRpc">Save & connect</button>
           <div class="form-message" id="settingsMessage"></div>

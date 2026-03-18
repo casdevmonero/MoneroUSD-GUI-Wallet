@@ -535,25 +535,28 @@
       showBlockProgress('', false);
       if (info.height > 0) {
         // Wallet has synced blocks — daemon is reachable
+        setRpcStatus(true);
         showSyncStatus('', false);
         return;
       }
-      // Height is 0 — check if daemon itself is reachable before showing error
+      // Height is 0 — check if daemon itself is reachable
+      const daemonUrl = isBrowser ? (window.location.origin + '/daemon_rpc') : '/daemon_rpc';
       try {
-        const resp = await fetch('/daemon_rpc', {
+        const resp = await fetch(daemonUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
           body: JSON.stringify({ jsonrpc: '2.0', id: '0', method: 'get_info', params: {} }),
         });
         const data = await resp.json();
         if (data && data.result && data.result.height > 0) {
-          // Daemon is running fine — wallet just hasn't synced yet
+          setRpcStatus(true);
           showSyncStatus('Daemon connected (height ' + data.result.height + '). Click Refresh to sync wallet.', true);
           return;
         }
       } catch (_) {}
       showSyncStatus(isBrowser
-        ? 'Not connected to daemon. The server may be syncing — try clicking Refresh in a moment.'
+        ? 'Relay connected. Click Refresh to sync wallet with blockchain.'
         : 'Not connected to daemon. Set Daemon URL in Settings, start USDmd, then click Refresh.', true);
     } catch (_) {
       showBlockProgress('', false);
@@ -740,6 +743,7 @@
           res = await fetch(url + '/json_rpc', {
             method: 'POST',
             headers: getRpcHeaders(),
+            credentials: 'same-origin',
             body: JSON.stringify({
               jsonrpc: '2.0',
               id: '0',
@@ -811,6 +815,7 @@
       const res = await fetch(url + '/json_rpc', {
         method: 'POST',
         headers: getRpcHeaders(),
+        credentials: 'same-origin',
         body: JSON.stringify({ jsonrpc: '2.0', id: '0', method, params }),
         signal: controller.signal,
       });
@@ -1308,7 +1313,10 @@
     const el = document.getElementById('rpcStatus');
     if (!el) return;
     el.classList.toggle('connected', connected);
-    el.querySelector('span:last-child').textContent = connected ? 'Connected' : 'Disconnected';
+    const label = connected
+      ? (isBrowser ? 'Connected to Relay' : 'Connected')
+      : 'Disconnected';
+    el.querySelector('span:last-child').textContent = label;
     updateBalanceRpcHint(!connected, balanceZero === true);
   }
 
@@ -4818,6 +4826,7 @@
           // startup, and calling set_daemon on a freshly restored wallet triggers a
           // blocking background sync that freezes all subsequent RPC calls.
           importInFlight = false;
+          setRpcStatus(true);
           showSyncStatus(isBrowser
             ? 'Wallet restored. Connected to MoneroUSD relay. Syncing blockchain…'
             : 'Wallet restored. Syncing blockchain…', true);

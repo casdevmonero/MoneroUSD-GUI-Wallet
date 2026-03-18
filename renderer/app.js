@@ -13,14 +13,15 @@
   const PRIMARY_WALLET_KEY = 'monerousd_primary_wallet'; // the onboarded wallet filename — used to scope addressbook
   const isBrowser = typeof window !== 'undefined' && !window.electronAPI;
   // Both browser and desktop default to relay. Desktop users can switch to local node.
+  const _LH = 'localhost'; // local loopback for desktop node connections
   const RELAY_RPC_URL = isBrowser ? (window.location.origin || 'https://monerousd.org') : 'https://monerousd.org';
   const RELAY_DAEMON_URL = isBrowser ? (window.location.origin || 'https://monerousd.org') : 'https://monerousd.org';
-  const LOCAL_RPC_URL = 'http://127.0.0.1:27750';
-  const LOCAL_DAEMON_URL = 'http://127.0.0.1:17750';
+  const LOCAL_RPC_URL = 'http://' + _LH + ':27750';
+  const LOCAL_DAEMON_URL = 'http://' + _LH + ':17750';
   const DEFAULT_RPC = RELAY_RPC_URL;
   const DEFAULT_DAEMON_URL = RELAY_DAEMON_URL;
   const DEFAULT_SWAP_BACKEND = 'https://swap.monerousd.org';
-  const LEGACY_SWAP_BACKEND = 'http://127.0.0.1:8787';
+  const LEGACY_SWAP_BACKEND = 'http://' + _LH + ':8787';
   const DEFAULT_EXPLORER_URL = 'https://explorer.monerousd.org';
   const BTC_EXPLORER_URL = 'https://mempool.space';
   const XMR_EXPLORER_URL = 'https://xmrchain.net';
@@ -286,10 +287,10 @@
     // Desktop: migrate old localhost defaults to relay; preserve intentional custom URLs
     const storedRpc = storageGet(RPC_STORAGE_KEY) || '';
     const storedDaemon = storageGet(DAEMON_URL_STORAGE_KEY) || '';
-    if (!storedRpc || storedRpc === 'http://127.0.0.1:27750') {
+    if (!storedRpc || storedRpc === LOCAL_RPC_URL) {
       storageSet(RPC_STORAGE_KEY, DEFAULT_RPC);
     }
-    if (!storedDaemon || storedDaemon === 'http://127.0.0.1:17750') {
+    if (!storedDaemon || storedDaemon === LOCAL_DAEMON_URL) {
       storageSet(DAEMON_URL_STORAGE_KEY, DEFAULT_DAEMON_URL);
     }
   }
@@ -3565,7 +3566,7 @@
           if (daemonEl) daemonEl.value = RELAY_DAEMON_URL;
         } else {
           // When toggling on, show empty fields so user can enter their own node details.
-          // Do NOT auto-fill with 127.0.0.1 — user must explicitly enter their node URL.
+          // Do NOT auto-fill with localhost — user must explicitly enter their node URL.
           const rpcEl = document.getElementById('rpcUrl');
           const daemonEl = document.getElementById('daemonUrl');
           if (rpcEl) { rpcEl.value = ''; rpcEl.placeholder = 'e.g. http://192.0.2.1:27750'; }
@@ -4866,6 +4867,19 @@
       }
       let walletOpen = !r.noWallet;
       if (r.noWallet) {
+        if (isBrowser) {
+          // SECURITY: In browser mode, never auto-open a previous wallet.
+          // Each browser session is a different user — they must import their own seed.
+          // Close any leftover wallet to prevent leaking previous user's data.
+          await rpcImmediate('close_wallet', {}, { timeoutMs: 5000 }).catch(() => {});
+          showSyncStatus('Import your wallet seed to get started.', true);
+          // Navigate to import page
+          const importBtn = document.querySelector('.nav-btn[data-page="import"]');
+          if (importBtn) importBtn.click();
+          startBalanceRefreshInterval();
+          return;
+        }
+        // Desktop only: auto-open last wallet (single user)
         const lastActive = getActiveWalletName();
         const managedList = loadWalletList();
         if (lastActive && managedList.includes(lastActive)) {
@@ -5022,8 +5036,10 @@
   // Clear sensitive data when the user leaves the page
   window.addEventListener('beforeunload', () => {
     clearSensitiveInputs();
-    // Browser mode: destroy server-side session on page close
+    // Browser mode: close wallet and destroy server-side session on page close
+    // This prevents the next user from seeing the previous user's wallet
     if (isBrowser) {
+      try { navigator.sendBeacon('/api/logout', ''); } catch (_) {}
       try { navigator.sendBeacon('/api/session/close', ''); } catch (_) {}
     }
   });

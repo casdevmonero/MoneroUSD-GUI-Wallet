@@ -207,7 +207,7 @@ function daemonRpcLocal(port, method, params) {
   return new Promise((resolve, reject) => {
     const body = JSON.stringify({ jsonrpc: '2.0', id: '0', method, params: params || {} });
     const opts = {
-      hostname: '127.0.0.1', port, path: '/json_rpc', method: 'POST',
+      hostname: 'localhost', port, path: '/json_rpc', method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
     };
     const req = http.request(opts, (res) => {
@@ -228,7 +228,7 @@ function daemonRestLocal(port, urlPath, body) {
   return new Promise((resolve, reject) => {
     const data = body ? JSON.stringify(body) : '';
     const opts = {
-      hostname: '127.0.0.1', port, path: urlPath,
+      hostname: 'localhost', port, path: urlPath,
       method: body ? 'POST' : 'GET',
       headers: body ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) } : {},
     };
@@ -265,7 +265,7 @@ ipcMain.handle('local-node-start', async (event, { rpcPort = 17750, p2pPort = 17
   const dataDir = getDataDir();
   const args = [
     '--data-dir', path.join(dataDir, 'blockchain'),
-    '--rpc-bind-ip', '127.0.0.1',
+    '--rpc-bind-ip', 'localhost',
     '--rpc-bind-port', String(rpcPort),
     '--p2p-bind-port', String(p2pPort),
     '--confirm-external-bind',
@@ -472,7 +472,7 @@ ipcMain.handle('local-node-setup', async (event, { seedNodes = [] } = {}) => {
     } else {
       const args = [
         '--data-dir', blockchainDir,
-        '--rpc-bind-ip', '127.0.0.1',
+        '--rpc-bind-ip', 'localhost',
         '--rpc-bind-port', '17750',
         '--p2p-bind-port', '17749',
         '--confirm-external-bind',
@@ -547,9 +547,9 @@ ipcMain.handle('local-wallet-rpc-start', async (event, { daemonPort = 17750, wal
   if (!fs.existsSync(walletDir)) fs.mkdirSync(walletDir, { recursive: true });
 
   const args = [
-    '--daemon-address', '127.0.0.1:' + daemonPort,
+    '--daemon-address', 'localhost:' + daemonPort,
     '--rpc-bind-port', String(walletRpcPort),
-    '--rpc-bind-ip', '127.0.0.1',
+    '--rpc-bind-ip', 'localhost',
     '--disable-rpc-login',
     '--wallet-dir', walletDir,
     '--log-level', '1',
@@ -748,7 +748,7 @@ app.on('activate', () => { if (mainWindow === null) createWindow(); });
 
 ipcMain.handle('get-app-version', () => app.getVersion());
 
-// Proxy wallet RPC from main process so renderer (file://) can reach http://127.0.0.1 without CORS.
+// Proxy wallet RPC from main process so renderer (file://) can reach local RPC without CORS.
 // Retry on ECONNRESET / connection errors (local nodes only; wallet RPC can drop under load).
 const RPC_MAX_ATTEMPTS = 3;
 const RPC_RETRY_DELAY_MS = 2000;

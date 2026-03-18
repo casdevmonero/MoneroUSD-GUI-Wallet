@@ -322,7 +322,9 @@ window.addEventListener('unhandledrejection', function(e) {
   let rpcUrl = storageGet(RPC_STORAGE_KEY) || DEFAULT_RPC;
   let currentWalletAddress = '';
   const storedSwapBackend = storageGet(SWAP_BACKEND_STORAGE_KEY);
-  if (!storedSwapBackend || storedSwapBackend === LEGACY_SWAP_BACKEND) {
+  // Force correct swap backend for browser users — any old URL (http://, raw IP, localhost)
+  // must be replaced with the HTTPS domain to avoid mixed-content and firewall blocks
+  if (isBrowser || !storedSwapBackend || storedSwapBackend === LEGACY_SWAP_BACKEND || storedSwapBackend.startsWith('http://')) {
     storageSet(SWAP_BACKEND_STORAGE_KEY, DEFAULT_SWAP_BACKEND);
   }
   if (!storageGet(LIGHT_WALLET_ENABLED_KEY)) storageSet(LIGHT_WALLET_ENABLED_KEY, 'false');
@@ -887,7 +889,11 @@ window.addEventListener('unhandledrejection', function(e) {
   }
 
   async function swapFetch(path, options = {}) {
-    const base = getSwapBackendUrl().replace(/\/$/, '');
+    // In browser mode, proxy swap calls through same origin to avoid CORS issues
+    // /api/swap/* on the light-wallet service proxies to the swap service
+    const base = isBrowser
+      ? (window.location.origin + '/api/swap')
+      : getSwapBackendUrl().replace(/\/$/, '');
     const url = base + path;
     const timeoutMs = options.timeoutMs != null ? options.timeoutMs : 15000;
     const controller = new AbortController();
@@ -2734,7 +2740,9 @@ window.addEventListener('unhandledrejection', function(e) {
           stopPolling();
           if (cancelBtn) cancelBtn.classList.add('hidden');
         }
-      } catch (_) {}
+      } catch (e) {
+        console.error('[swap-poll] Error polling swap status:', e.message || e);
+      }
     }
 
     function startPolling() {

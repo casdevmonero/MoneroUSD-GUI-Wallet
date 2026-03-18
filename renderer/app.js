@@ -3052,7 +3052,11 @@
         btn.disabled = true;
         btn.textContent = 'Claiming...';
         try {
-          await fetch(getStakingUrl() + '/api/staking/claim/' + id, { method: 'POST' });
+          await fetch(getStakingUrl() + '/api/staking/claim/' + id, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ wallet_address: currentWalletAddress }),
+          });
           await refreshStakingUI();
         } catch (e) {
           showMessage('stakeMessage', 'Claim failed: ' + (e.message || 'Unknown error'), true);
@@ -3071,7 +3075,11 @@
           const stakeInfo = await infoRes.json();
 
           // Call unstake on the service
-          const res = await fetch(getStakingUrl() + '/api/staking/unstake/' + id, { method: 'POST' });
+          const res = await fetch(getStakingUrl() + '/api/staking/unstake/' + id, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ wallet_address: currentWalletAddress }),
+          });
           const data = await res.json();
           if (data.error) throw new Error(data.error);
 
@@ -3352,7 +3360,7 @@
           const res = await fetch(getLendingUrl() + '/api/loans/' + id + '/cancel', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({}),
+            body: JSON.stringify({ usdm_address: currentWalletAddress }),
           });
           const data = await res.json();
           if (data.error) throw new Error(data.error);
@@ -3376,7 +3384,7 @@
           const res = await fetch(getLendingUrl() + '/api/loans/' + id + '/repay', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({}),
+            body: JSON.stringify({ usdm_address: currentWalletAddress }),
           });
           const data = await res.json();
           if (data.error) throw new Error(data.error);
@@ -3631,21 +3639,54 @@
     if (swapBackendEl) swapBackendEl.value = storageGet(SWAP_BACKEND_STORAGE_KEY) || DEFAULT_SWAP_BACKEND;
     setLightWalletConfig(storageGet(LIGHT_WALLET_URL_KEY) || '', storageGet(LIGHT_WALLET_TOKEN_KEY) || '', storageGet(LIGHT_WALLET_ENABLED_KEY) === 'true');
     document.getElementById('btnSaveRpc')?.addEventListener('click', async () => {
-      const url = document.getElementById('rpcUrl').value.trim();
-      const daemonUrl = (document.getElementById('daemonUrl') || {}).value.trim() || DEFAULT_DAEMON_URL;
+      const useCustom = customNodeToggle && customNodeToggle.checked;
       const swapBackendUrl = (document.getElementById('swapBackendUrl') || {}).value.trim() || DEFAULT_SWAP_BACKEND;
       const lightUrl = (document.getElementById('lightWalletUrl') || {}).value.trim();
       const lightToken = (document.getElementById('lightWalletToken') || {}).value.trim();
       const lightEnabled = !!(document.getElementById('lightWalletEnabled') || {}).checked;
-      setDaemonUrl(daemonUrl);
       setSwapBackendUrl(swapBackendUrl);
       setLightWalletConfig(lightUrl, lightToken, lightEnabled);
       const hint = document.getElementById('swapBackendHint');
       if (hint) hint.textContent = 'Swap backend: ' + getSwapBackendUrl();
-      if (!url) return;
+
+      if (!useCustom) {
+        // Using relay — just verify connection through relay proxy
+        setRpcUrl(RELAY_RPC_URL);
+        setDaemonUrl(RELAY_DAEMON_URL);
+        rpcFailureCount = 0;
+        showMessage('settingsMessage', 'Verifying relay connection…');
+        try {
+          const result = await checkConnection({ timeoutMs: 12000 });
+          updateRelayStatus(true);
+          if (result.noWallet) {
+            showMessage('settingsMessage', 'Relay connected. Import a wallet seed to get started.', false);
+          } else {
+            await configureWalletRpcMoneroStyle().catch(() => {});
+            showMessage('settingsMessage', 'Relay connected. Wallet syncing.', false);
+            refreshBalances().catch(() => {});
+            refreshAddress().catch(() => {});
+            refreshTransfers().catch(() => {});
+            startBalanceRefreshInterval();
+          }
+        } catch (e) {
+          updateRelayStatus(false);
+          showMessage('settingsMessage', 'Could not reach relay. Try refreshing the page.', true);
+        }
+        return;
+      }
+
+      // Custom node — use user-entered URLs
+      const url = (document.getElementById('rpcUrl') || {}).value.trim();
+      const daemonUrl = (document.getElementById('daemonUrl') || {}).value.trim() || DEFAULT_DAEMON_URL;
+      setDaemonUrl(daemonUrl);
+      if (!url) {
+        showMessage('settingsMessage', 'Enter a Wallet RPC URL to connect.', true);
+        return;
+      }
       setRpcUrl(url);
       rpcFailureCount = 0;
-      showMessage('settingsMessage', 'Saved. Connecting…');
+      updateRelayStatus(false);
+      showMessage('settingsMessage', 'Saved. Connecting to custom node…');
       const connectWatchdog = setTimeout(() => {
         showMessage('settingsMessage', 'Connection still running. You can click Refresh to retry.', true);
         showSyncStatus('', false);
@@ -3653,10 +3694,10 @@
       try {
         const result = await checkConnection({ timeoutMs: 12000 });
         if (result.noWallet) {
-          showMessage('settingsMessage', 'Connected. No wallet open — use Import to restore from seed or create a wallet.', false);
+          showMessage('settingsMessage', 'Connected to custom node. No wallet open — use Import to restore from seed.', false);
         } else {
           await configureWalletRpcMoneroStyle().catch(() => {});
-          showMessage('settingsMessage', result.addressError ? 'Connected. Wallet may be busy; click Refresh to sync.' : 'Connected. Daemon set; auto-refresh enabled (Monero-style).', false);
+          showMessage('settingsMessage', 'Connected to custom node. Wallet syncing.', false);
           refreshBalances().catch(() => {});
           refreshAddress().catch(() => {});
           refreshTransfers().catch(() => {});
@@ -3679,6 +3720,8 @@
   let nodeRunning = false;
 
   function bindLocalNode() {
+    const enableToggle = document.getElementById('enableLocalNodeToggle');
+    const localNodeContent = document.getElementById('localNodeContent');
     const btnCreate = document.getElementById('btnCreateNode');
     const btnStop = document.getElementById('btnStopNode');
     const btnAdvanced = document.getElementById('btnNodeAdvanced');
@@ -3687,6 +3730,17 @@
     const runningPanel = document.getElementById('nodeRunningPanel');
     const setupSteps = document.getElementById('nodeSetupSteps');
     const setupBox = document.getElementById('nodeSetupBox');
+
+    // Wire up the enable local node checkbox
+    if (enableToggle && localNodeContent) {
+      // If node is already running, auto-check
+      if (nodeRunning) enableToggle.checked = true;
+      enableToggle.addEventListener('change', () => {
+        localNodeContent.classList.toggle('hidden', !enableToggle.checked);
+      });
+      // Show content if already checked
+      if (enableToggle.checked) localNodeContent.classList.remove('hidden');
+    }
     if (!btnCreate) return;
 
     const isElectron = !!(window.electronAPI && window.electronAPI.localNodeSetup);
@@ -4764,7 +4818,9 @@
           // startup, and calling set_daemon on a freshly restored wallet triggers a
           // blocking background sync that freezes all subsequent RPC calls.
           importInFlight = false;
-          showSyncStatus('Wallet restored. Syncing blockchain…', true);
+          showSyncStatus(isBrowser
+            ? 'Wallet restored. Connected to MoneroUSD relay. Syncing blockchain…'
+            : 'Wallet restored. Syncing blockchain…', true);
           await configureWalletRpcMoneroStyle().catch(() => {});
           await refreshAddress().catch(() => {});
           // Use incremental refresh (short batches) so we don't freeze the RPC
@@ -4899,8 +4955,8 @@
       for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
         if (autoConnectCancelled || importInFlight || switchInFlight) return;
         try {
-          if (attempt > 1) showSyncStatus('Connecting to wallet RPC… (attempt ' + attempt + ')', true);
-          else showSyncStatus('Connecting…', true);
+          if (attempt > 1) showSyncStatus((isBrowser ? 'Connecting to relay… ' : 'Connecting to wallet RPC… ') + '(attempt ' + attempt + ')', true);
+          else showSyncStatus(isBrowser ? 'Connecting to MoneroUSD relay…' : 'Connecting…', true);
           r = await checkConnection({ timeoutMs: 8000 });
           break;
         } catch (_) {

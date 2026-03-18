@@ -499,9 +499,15 @@
           <div class="form-message" id="viewKeyMessage"></div>
         </div>
         <div class="card" id="localNodeCard">
-          <h3>&#127760; Run Local Node</h3>
-          <p class="text-muted">Run your own USDmd full node directly from the wallet. Validates all transactions locally for maximum privacy and security.</p>
+          <h3>&#127760; Local Node</h3>
+          <p class="text-muted">Run your own independent USDmd full node. Validates all transactions locally for maximum privacy and security.</p>
+          <label class="checkbox-row" style="font-size:.9rem;cursor:pointer;margin-bottom:12px">
+            <input type="checkbox" id="enableLocalNodeToggle" />
+            <span>Enable local node</span>
+          </label>
 
+          <!-- Node content — hidden until checkbox is checked -->
+          <div id="localNodeContent" class="hidden">
           <!-- Setup panel: shown when no node is running -->
           <div id="nodeSetupPanel">
             <div class="node-setup-box" id="nodeSetupBox">
@@ -555,6 +561,7 @@
             <pre class="node-log-output" id="nodeLogOutput" style="max-height:150px;overflow-y:auto;font-size:0.7rem;background:rgba(0,0,0,0.3);padding:8px;border-radius:6px;margin-top:6px;white-space:pre-wrap;word-break:break-all;"></pre>
           </details>
           <div class="form-message" id="nodeMessage"></div>
+          </div><!-- /localNodeContent -->
         </div>
         <div class="card">
           <h3>&#9874; Mine USDm</h3>

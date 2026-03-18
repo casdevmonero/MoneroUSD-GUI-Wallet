@@ -4768,6 +4768,10 @@
       showMainApp();
       initMainApp();
 
+      // In browser mode, the relay session is already connected — show it immediately.
+      // autoConnect returns early when importInFlight is true, so we must set status here.
+      if (isBrowser) setRpcStatus(true);
+
       // Watchdog: if restore takes >45s, show a helpful message
       let restoreWatchdog = setTimeout(() => {
         showSyncStatus('Wallet restore is taking a while — the wallet RPC may be syncing with the daemon. This can take a few minutes. If it seems stuck, restart the wallet RPC and try again.', true);
@@ -4777,8 +4781,9 @@
       (async function backgroundRestore() {
         try {
           rpcQueue = Promise.resolve();
+          setRpcStatus(true); // relay session is active
+          showSyncStatus(isBrowser ? 'Connected to relay. Restoring wallet from seed…' : 'Restoring wallet from seed…', true);
           await rpcImmediate('close_wallet', {}, { timeoutMs: 5000 }).catch(() => {});
-          showSyncStatus('Restoring wallet from seed…', true);
           try {
             await rpcNoRetry('restore_deterministic_wallet', {
               seed: seed,

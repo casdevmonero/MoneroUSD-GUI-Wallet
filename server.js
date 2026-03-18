@@ -338,6 +338,44 @@ const server = http.createServer(async (req, res) => {
     return sendJson(res, 200, { status: 'closed' });
   }
 
+  // --- Swap service proxy (same-origin for browser) ---
+
+  if (req.url.startsWith('/api/swap-proxy/')) {
+    // CORS preflight
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204, {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, POST, PUT, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type',
+        'Access-Control-Max-Age': '86400',
+      });
+      res.end();
+      return;
+    }
+    const swapPath = req.url.replace('/api/swap-proxy/', '/');
+    const swapUrl = `http://127.0.0.1:8787${swapPath}`;
+    const proxyReq = http.request(swapUrl, {
+      method: req.method,
+      headers: { ...req.headers, host: '127.0.0.1:8787' },
+      timeout: 15000,
+    }, (proxyRes) => {
+      res.writeHead(proxyRes.statusCode, {
+        'Content-Type': proxyRes.headers['content-type'] || 'application/json',
+        'Access-Control-Allow-Origin': '*',
+      });
+      proxyRes.pipe(res);
+    });
+    proxyReq.on('error', () => {
+      sendJson(res, 502, { error: 'Swap service unavailable' });
+    });
+    if (req.method === 'POST' || req.method === 'PUT') {
+      req.pipe(proxyReq);
+    } else {
+      proxyReq.end();
+    }
+    return;
+  }
+
   // --- Wallet JSON-RPC proxy (per-session) ---
 
   if (req.method === 'POST' && req.url === '/json_rpc') {

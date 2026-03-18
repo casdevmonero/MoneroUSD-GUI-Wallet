@@ -35,10 +35,14 @@
   const SWAP_HISTORY_KEY = 'monerousd_swap_history';
   const walletPasswordCache = new Map();
 
-  // Safe localStorage access to avoid cache/storage errors (QUOTA_EXCEEDED, SecurityError, disabled storage).
+  // In browser mode, use sessionStorage (cleared when tab closes) for privacy.
+  // In desktop mode, use localStorage (persists across sessions) for convenience.
+  const _storage = isBrowser ? (window.sessionStorage || window.localStorage) : window.localStorage;
+
+  // Safe storage access to avoid cache/storage errors (QUOTA_EXCEEDED, SecurityError, disabled storage).
   function storageGet(key) {
     try {
-      return localStorage.getItem(key);
+      return _storage.getItem(key);
     } catch (e) {
       if (typeof console !== 'undefined' && console.warn) console.warn('localStorage get failed:', e);
       return null;
@@ -46,7 +50,7 @@
   }
   function storageSet(key, value) {
     try {
-      localStorage.setItem(key, value);
+      _storage.setItem(key, value);
     } catch (e) {
       if (e && e.name === 'QuotaExceededError' && typeof console !== 'undefined' && console.warn)
         console.warn('localStorage quota exceeded; settings not persisted.');

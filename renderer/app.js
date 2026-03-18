@@ -40,6 +40,10 @@ window.addEventListener('unhandledrejection', function(e) {
   const DEFAULT_SWAP_BACKEND = 'https://swap.monerousd.org';
   const LEGACY_SWAP_BACKEND = 'http://' + _LH + ':8787';
   const DEFAULT_EXPLORER_URL = 'https://explorer.monerousd.org';
+
+  // Browser session ID — stored in memory and sent as X-Session-Id header
+  // This avoids cookie issues with proxy chains (SameSite, Secure, etc.)
+  let browserSessionId = '';
   const BTC_EXPLORER_URL = 'https://mempool.space';
   const XMR_EXPLORER_URL = 'https://xmrchain.net';
   const BTC_RESERVE_ADDRESS = 'bc1qukurxzulh6h356ctnqudqz5kfna5g6ehrcqhn4';
@@ -638,9 +642,12 @@ window.addEventListener('unhandledrejection', function(e) {
   }
 
   function getRpcHeaders() {
-    // Browser mode: session routing handled by cookies — no extra header needed
-    // Desktop mode: direct localhost connection — no header needed
-    return { 'Content-Type': 'application/json' };
+    const headers = { 'Content-Type': 'application/json' };
+    // Browser mode: send session ID as header (more reliable than cookies through proxies)
+    if (isBrowser && browserSessionId) {
+      headers['X-Session-Id'] = browserSessionId;
+    }
+    return headers;
   }
 
   const LOCAL_NODE_HINT = ' Local nodes only: run USDmd (port 17750) and ./start-wallet-rpc.sh (port 27750). No public Haven nodes.';
@@ -4764,7 +4771,25 @@ window.addEventListener('unhandledrejection', function(e) {
         if (msg) { msg.textContent = 'Seed must be 25 words. You have ' + wordCount + '.'; msg.classList.add('error'); }
         return;
       }
-      if (msg) { msg.textContent = 'Restoring wallet...'; msg.classList.remove('error'); }
+      if (msg) { msg.textContent = 'Restoring wallet... (making RPC call)'; msg.classList.remove('error'); }
+
+      // Direct fetch test before going through RPC wrappers
+      if (isBrowser && msg) {
+        try {
+          const testResp = await fetch(window.location.origin + '/json_rpc', {
+            method: 'POST',
+            headers: getRpcHeaders(),
+            credentials: 'same-origin',
+            body: JSON.stringify({ jsonrpc: '2.0', id: '0', method: 'get_version', params: {} }),
+          });
+          const testData = await testResp.json();
+          msg.textContent = 'RPC OK (v' + (testData.result ? testData.result.version : '?') + '). Starting restore...';
+        } catch (fetchErr) {
+          msg.textContent = 'RPC FAILED: ' + (fetchErr.message || String(fetchErr));
+          msg.classList.add('error');
+          return; // stop if we can't reach the server
+        }
+      }
 
       const filename = generateWalletFilename();
       if (password) walletPasswordCache.set(filename, password);
@@ -5176,8 +5201,10 @@ window.addEventListener('unhandledrejection', function(e) {
     // Browser mode: close wallet and destroy server-side session on page close
     // This prevents the next user from seeing the previous user's wallet
     if (isBrowser) {
-      try { navigator.sendBeacon('/api/logout', ''); } catch (_) {}
-      try { navigator.sendBeacon('/api/session/close', ''); } catch (_) {}
+      // sendBeacon can't set custom headers, so include session in URL
+      const sid = browserSessionId ? '?sid=' + browserSessionId : '';
+      try { navigator.sendBeacon('/api/logout' + sid, ''); } catch (_) {}
+      try { navigator.sendBeacon('/api/session/close' + sid, ''); } catch (_) {}
     }
   });
   // Also clear when the tab is hidden (e.g. user switches tabs)
@@ -5190,12 +5217,16 @@ window.addEventListener('unhandledrejection', function(e) {
     try {
       const resp = await fetch('/api/session', { method: 'POST', credentials: 'same-origin' });
       const data = await resp.json();
+      if (data.session_id) browserSessionId = data.session_id;
       if (data.status === 'ready') return true;
       if (data.status === 'starting') {
         // Poll until ready (max 20s)
         for (let i = 0; i < 40; i++) {
           await new Promise(ok => setTimeout(ok, 500));
-          const r = await fetch('/api/session/status', { credentials: 'same-origin' });
+          const r = await fetch('/api/session/status', {
+            credentials: 'same-origin',
+            headers: browserSessionId ? { 'X-Session-Id': browserSessionId } : {},
+          });
           const d = await r.json();
           if (d.status === 'ready') return true;
           if (d.status === 'dead' || d.status === 'none') return false;
@@ -5239,8 +5270,30 @@ window.addEventListener('unhandledrejection', function(e) {
 
       initBrowserSession().then((ok) => {
         if (welcomeMsg) {
-          welcomeMsg.textContent = ok ? '' : 'Could not start wallet engine. Please refresh.';
-          if (ok) welcomeMsg.classList.add('hidden');
+          if (ok) {
+            welcomeMsg.textContent = 'Wallet engine ready. Session active.';
+            welcomeMsg.style.color = '#4caf50';
+            // Test an RPC call to prove connectivity
+            fetch(window.location.origin + '/json_rpc', {
+              method: 'POST',
+              headers: getRpcHeaders(),
+              credentials: 'same-origin',
+              body: JSON.stringify({ jsonrpc: '2.0', id: '0', method: 'get_version', params: {} }),
+            }).then(r => r.json()).then(d => {
+              if (d && d.result) {
+                welcomeMsg.textContent = 'Connected to relay. Ready to import wallet.';
+              } else {
+                welcomeMsg.textContent = 'Session active but RPC test failed: ' + JSON.stringify(d).slice(0, 100);
+                welcomeMsg.style.color = '#f44';
+              }
+            }).catch(e => {
+              welcomeMsg.textContent = 'RPC test error: ' + (e.message || String(e));
+              welcomeMsg.style.color = '#f44';
+            });
+          } else {
+            welcomeMsg.textContent = 'Could not start wallet engine. Please refresh.';
+            welcomeMsg.style.color = '#f44';
+          }
         }
       });
       return;

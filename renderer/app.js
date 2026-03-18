@@ -4307,7 +4307,7 @@
           // Enable auto_refresh so wallet keeps syncing in background
           await configureWalletRpcMoneroStyle().catch(() => {});
           // Refresh in a loop with generous timeout — chain may have many blocks
-          const MAX_SYNC_ATTEMPTS = 5;
+          const MAX_SYNC_ATTEMPTS = 15;
           let synced = false;
           for (let attempt = 1; attempt <= MAX_SYNC_ATTEMPTS; attempt++) {
             if (getActiveWalletName() !== importedName) return;
@@ -4317,18 +4317,25 @@
               const daemonH = await getDaemonHeight();
               const remaining = Math.max(0, daemonH - walletH);
               if (remaining > 0) {
-                showSyncStatus('Syncing… ' + walletH + ' / ' + daemonH + ' blocks (attempt ' + attempt + '/' + MAX_SYNC_ATTEMPTS + ')', true);
-              } else {
+                showSyncStatus('Syncing… ' + walletH + ' / ' + daemonH + ' blocks remaining', true);
+              } else if (walletH > 0) {
                 showSyncStatus('Syncing…', true);
               }
-              await rpcImmediate('refresh', { start_height: 0 }, { timeoutMs: 120000 });
-              synced = true;
-              break;
-            } catch (_) {
-              if (attempt < MAX_SYNC_ATTEMPTS) {
-                showSyncStatus('Sync in progress… retrying (' + (attempt + 1) + '/' + MAX_SYNC_ATTEMPTS + ')', true);
-                await new Promise(ok => setTimeout(ok, 2000));
+              // Check if already fully synced
+              if (walletH > 0 && remaining <= 0) {
+                synced = true;
+                break;
               }
+              await rpcImmediate('refresh', { start_height: 0 }, { timeoutMs: 120000 });
+              // Check height again after refresh
+              const after = await rpcImmediate('get_height', {}, { timeoutMs: 5000 }).catch(() => null);
+              if (after && after.height >= daemonH) {
+                synced = true;
+                break;
+              }
+            } catch (_) {}
+            if (attempt < MAX_SYNC_ATTEMPTS) {
+              await new Promise(ok => setTimeout(ok, 3000));
             }
           }
           if (!synced && getActiveWalletName() === importedName) {

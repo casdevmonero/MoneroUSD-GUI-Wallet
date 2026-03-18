@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' http://localhost:* https://*.monerousd.org https://monerousd.org https://api.coingecko.com;" />
   <title>Monero USD Wallet</title>
-  <link rel="stylesheet" href="/styles.css?v=20260319f" />
+  <link rel="stylesheet" href="/styles.css?v=20260319h" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet" />
@@ -657,6 +657,11 @@
         <label id="swapPayoutLabel">Your payout address</label>
         <input type="text" id="swapPayoutAddress" placeholder="Address" class="input" />
       </div>
+      <div class="swap-id-row hidden" id="swapIdRow" style="margin-bottom:8px;padding:6px 10px;background:var(--bg-tertiary,#1a1a2e);border-radius:6px;font-size:.8rem;display:flex;align-items:center;gap:8px;">
+        <span style="color:var(--text-muted,#888);">Swap ID:</span>
+        <span id="swapIdDisplay" style="font-family:'JetBrains Mono',monospace;color:var(--accent,#7c6fe0);word-break:break-all;flex:1;">—</span>
+        <button class="btn btn-sm btn-ghost" id="swapCopyId" title="Copy swap ID" style="white-space:nowrap;padding:2px 8px;font-size:11px;">Copy</button>
+      </div>
       <div class="swap-deposit hidden" id="swapDepositSection">
         <div class="swap-deposit-details">
           <div class="swap-deposit-label">Deposit to</div>
@@ -675,7 +680,7 @@
       <p class="text-muted small" id="swapDisclaimer">BTC and XMR deposits are confirmed on-chain before USDm is minted. USDm burns are confirmed before payouts.</p>
     </div>
   </div>
-  <script src="/welcome-bg.js?v=20260319f"></script>
-  <script src="/app.js?v=20260319f"></script>
+  <script src="/welcome-bg.js?v=20260319h"></script>
+  <script src="/app.js?v=20260319h"></script>
 </body>
 </html>

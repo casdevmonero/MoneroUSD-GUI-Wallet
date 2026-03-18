@@ -2202,6 +2202,9 @@ window.addEventListener('unhandledrejection', function(e) {
     const copyDepositBtn = document.getElementById('swapCopyDepositAddr');
     const qrCanvas = document.getElementById('swapQrCanvas');
     const statusEl = document.getElementById('swapStatus');
+    const swapIdRow = document.getElementById('swapIdRow');
+    const swapIdDisplay = document.getElementById('swapIdDisplay');
+    const swapCopyIdBtn = document.getElementById('swapCopyId');
 
     // Copy deposit address button
     if (copyDepositBtn) {
@@ -2226,6 +2229,22 @@ window.addEventListener('unhandledrejection', function(e) {
         });
       });
     }
+    // Copy swap ID button
+    if (swapCopyIdBtn) {
+      swapCopyIdBtn.addEventListener('click', () => {
+        const id = (swapIdDisplay?.textContent || '').trim();
+        if (!id || id === '—') return;
+        navigator.clipboard.writeText(id).then(() => {
+          swapCopyIdBtn.textContent = 'Copied!';
+          setTimeout(() => { swapCopyIdBtn.textContent = 'Copy'; }, 2000);
+        }).catch(() => {});
+      });
+    }
+    function showSwapId(id) {
+      if (swapIdRow) swapIdRow.classList.toggle('hidden', !id);
+      if (swapIdDisplay) swapIdDisplay.textContent = id || '—';
+    }
+
     const actionBtn = document.getElementById('swapActionBtn');
     const cancelBtn = document.getElementById('swapCancelBtn');
     const newSwapBtn = document.getElementById('swapNewBtn');
@@ -2351,6 +2370,7 @@ window.addEventListener('unhandledrejection', function(e) {
 
     function resumeSwap(record) {
       swapId = record.swap_id;
+      showSwapId(swapId);
       swapMode = record.direction || 'crypto_to_usdm';
       swapAsset = record.asset || 'BTC';
       burnAddress = record.burn_address || '';
@@ -2433,6 +2453,7 @@ window.addEventListener('unhandledrejection', function(e) {
       swapId = null;
       burnAddress = '';
       depositAddress = '';
+      showSwapId(null);
       stopPolling();
       updateDepositSection(true);
       setStatus('Ready.');
@@ -2559,27 +2580,21 @@ window.addEventListener('unhandledrejection', function(e) {
 
     function updateDepositSection(resetOnly) {
       if (!depositSection) return;
-      depositSection.classList.toggle('hidden', swapMode !== 'crypto_to_usdm' || !isCrypto(swapAsset));
-      if (swapMode !== 'crypto_to_usdm' || !isCrypto(swapAsset)) {
+      // Only show deposit section after a swap is created (swapId set) with a per-swap address
+      const shouldShow = swapMode === 'crypto_to_usdm' && isCrypto(swapAsset) && swapId && depositAddress;
+      depositSection.classList.toggle('hidden', !shouldShow);
+      if (!shouldShow) {
         depositAddressEl.textContent = '—';
         depositAmountEl.textContent = '—';
         renderQrToCanvas('', qrCanvas);
         return;
       }
-      const address = reserveAddresses[swapAsset] || (swapAsset === 'BTC' ? BTC_RESERVE_ADDRESS : XMR_RESERVE_ADDRESS);
-      depositAddress = address;
       depositSection.classList.remove('hidden');
-      depositAddressEl.textContent = address;
-      if (resetOnly) {
-        depositAmountEl.textContent = 'Enter amount to see deposit details.';
-      } else {
-        const raw = (amountEl?.value || '').trim();
-        const amount = Number(raw);
-        depositAmountEl.textContent = Number.isFinite(amount) && amount > 0
-          ? `Send ${raw} ${swapAsset} to the reserve address`
-          : 'Enter amount to see deposit details.';
-      }
-      renderQrToCanvas(address, qrCanvas);
+      depositAddressEl.textContent = depositAddress;
+      depositAmountEl.textContent = resetOnly
+        ? 'Send deposit to this address.'
+        : `Send ${(amountEl?.value || '').trim()} ${swapAsset} to this address`;
+      renderQrToCanvas(depositAddress, qrCanvas);
     }
 
     async function createSwap() {
@@ -2601,6 +2616,7 @@ window.addEventListener('unhandledrejection', function(e) {
           },
         });
         swapId = res.swap_id;
+        showSwapId(swapId);
         depositAddress = res.deposit_address;
         persistSwap({
           swap_id: swapId, direction: 'crypto_to_usdm', asset: swapAsset,
@@ -2628,6 +2644,7 @@ window.addEventListener('unhandledrejection', function(e) {
           },
         });
         swapId = res.swap_id;
+        showSwapId(swapId);
         burnAddress = res.burn_address;
         persistSwap({
           swap_id: swapId, direction: 'usdm_to_crypto', asset: swapAsset,
@@ -2792,6 +2809,16 @@ window.addEventListener('unhandledrejection', function(e) {
     });
 
     normalizePair();
+
+    // Background poll ALL pending swaps (not just the focused one)
+    // NOTE: bgPollTimer must be declared before autoResumePendingSwaps() is called
+    let bgPollTimer = null;
+    function autoResumePendingSwaps() {
+      if (bgPollTimer) clearInterval(bgPollTimer);
+      bgPollTimer = setInterval(pollAllPendingSwaps, 10000);
+      pollAllPendingSwaps(); // Run immediately
+    }
+
     // Render swap history on init and auto-resume any pending swaps
     renderSwapHistory();
     autoResumePendingSwaps();
@@ -2874,13 +2901,6 @@ window.addEventListener('unhandledrejection', function(e) {
     // Run after a short delay to not block UI initialization
     setTimeout(syncSwapHistoryFromServer, 3000);
 
-    // Background poll ALL pending swaps (not just the focused one)
-    let bgPollTimer = null;
-    function autoResumePendingSwaps() {
-      if (bgPollTimer) clearInterval(bgPollTimer);
-      bgPollTimer = setInterval(pollAllPendingSwaps, 10000);
-      pollAllPendingSwaps(); // Run immediately
-    }
     async function pollAllPendingSwaps() {
       const swaps = getSwapsForWallet(getSwapWalletKey());
       const pending = swaps.filter((s) => isSwapPending(s.status));

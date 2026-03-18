@@ -2291,18 +2291,19 @@ window.addEventListener('unhandledrejection', function(e) {
         burn_confirmed: 'Burn confirmed',
         payout_sent: 'Payout sent',
         failed: 'Failed',
+        cancelled: 'Cancelled',
       };
       return map[status] || status || 'Unknown';
     }
 
     function swapStatusClass(status) {
       if (status === 'minted' || status === 'payout_sent') return 'success';
-      if (status === 'failed') return 'failed';
+      if (status === 'failed' || status === 'cancelled') return 'failed';
       return 'pending';
     }
 
     function isSwapPending(status) {
-      return status && status !== 'minted' && status !== 'payout_sent' && status !== 'failed';
+      return status && status !== 'minted' && status !== 'payout_sent' && status !== 'failed' && status !== 'cancelled';
     }
 
     function persistSwap(record) {
@@ -2312,7 +2313,9 @@ window.addEventListener('unhandledrejection', function(e) {
 
     function renderSwapHistory() {
       if (!swapHistoryList) return;
-      const swaps = getSwapsForWallet(getSwapWalletKey());
+      const swaps = getSwapsForWallet(getSwapWalletKey())
+        .slice()
+        .sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
       if (!swaps.length) {
         swapHistoryList.textContent = 'No swaps yet.';
         return;
@@ -2375,16 +2378,19 @@ window.addEventListener('unhandledrejection', function(e) {
     }
 
     function resumeSwap(record) {
-      swapId = record.swap_id;
-      showSwapId(swapId);
+      // Set mode/asset before openModal so selectors show correctly
       swapMode = record.direction || 'crypto_to_usdm';
       swapAsset = record.asset || 'BTC';
-      burnAddress = record.burn_address || '';
-      depositAddress = record.deposit_address || '';
       if (fromSel) fromSel.value = swapMode === 'crypto_to_usdm' ? swapAsset : 'USDm';
       if (toSel) toSel.value = swapMode === 'crypto_to_usdm' ? 'USDm' : swapAsset;
       normalizePair();
       openModal();
+      // Set swap state AFTER openModal (which calls resetSwapUi and clears these)
+      swapId = record.swap_id;
+      burnAddress = record.burn_address || '';
+      depositAddress = record.deposit_address || '';
+      showSwapId(swapId);
+      updateDepositSection();
       setStatus('Resuming swap ' + (swapId || '').slice(0, 8) + '...');
       if (actionBtn) { actionBtn.disabled = true; actionBtn.textContent = 'Polling...'; }
       if (newSwapBtn) newSwapBtn.classList.remove('hidden');

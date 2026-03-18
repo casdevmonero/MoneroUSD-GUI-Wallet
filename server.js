@@ -580,6 +580,17 @@ const server = http.createServer(async (req, res) => {
   }
   fs.readFile(file, (err, data) => {
     if (err) {
+      // SPA fallback: serve index.html for non-file routes (e.g. /wallet)
+      const fallback = path.join(rendererDir, 'index.html');
+      if (file !== fallback && !path.extname(urlPath)) {
+        fs.readFile(fallback, (err2, fallbackData) => {
+          if (err2) { res.writeHead(404); res.end('Not found'); return; }
+          res.setHeader('Content-Type', 'text/html');
+          res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+          res.end(fallbackData);
+        });
+        return;
+      }
       res.writeHead(404);
       res.end('Not found');
       return;

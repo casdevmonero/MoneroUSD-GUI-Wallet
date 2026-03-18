@@ -1,3 +1,20 @@
+// Global error handler — sends JS errors to server for debugging
+window.onerror = function(msg, src, line, col, err) {
+  try {
+    var el = document.getElementById('welcomeStatus') || document.getElementById('syncStatusBanner');
+    if (el) { el.textContent = 'JS Error: ' + msg + ' at ' + (src||'').split('/').pop() + ':' + line; el.classList.remove('hidden'); el.style.color = '#f44'; }
+    navigator.sendBeacon('/api/health?err=' + encodeURIComponent(msg + '|' + (src||'') + ':' + line), '');
+  } catch (_) {}
+};
+window.addEventListener('unhandledrejection', function(e) {
+  try {
+    var msg = e.reason ? (e.reason.message || String(e.reason)) : 'Unknown promise rejection';
+    var el = document.getElementById('welcomeStatus') || document.getElementById('syncStatusBanner');
+    if (el) { el.textContent = 'Promise Error: ' + msg; el.classList.remove('hidden'); el.style.color = '#f44'; }
+    navigator.sendBeacon('/api/health?err=' + encodeURIComponent('promise|' + msg), '');
+  } catch (_) {}
+});
+
 (function () {
   const RPC_STORAGE_KEY = 'monerousd_rpc_url';
   const BALANCE_STORAGE_KEY = 'monerousd_balance';
@@ -4815,6 +4832,7 @@
                   ? 'Restore timed out — the server may be busy. Click Refresh to retry.'
                   : 'Restore timed out — the wallet RPC is not responding. Make sure the wallet RPC and daemon are running, then click Refresh to retry.', true);
               } else if (/fetch|network|refused|unreachable|ECONNREFUSED/i.test(em)) {
+                if (isBrowser) setRpcStatus(false);
                 showSyncStatus(isBrowser
                   ? 'Cannot reach the wallet server. Try refreshing the page.'
                   : 'Cannot reach wallet RPC. Start it with: ./start-wallet-rpc.sh — then click Refresh to retry.', true);

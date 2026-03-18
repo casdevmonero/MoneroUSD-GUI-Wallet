@@ -890,9 +890,9 @@ window.addEventListener('unhandledrejection', function(e) {
 
   async function swapFetch(path, options = {}) {
     // In browser mode, proxy swap calls through same origin to avoid CORS issues
-    // /api/swap/* on the light-wallet service proxies to the swap service
+    // /api/swap-proxy/* on the light-wallet service proxies to the swap service
     const base = isBrowser
-      ? (window.location.origin + '/api/swap')
+      ? (window.location.origin + '/api/swap-proxy')
       : getSwapBackendUrl().replace(/\/$/, '');
     const url = base + path;
     const timeoutMs = options.timeoutMs != null ? options.timeoutMs : 15000;
@@ -3055,7 +3055,9 @@ window.addEventListener('unhandledrejection', function(e) {
 
   async function fetchReserves() {
     try {
-      const swapUrl = storageGet('monerousd_swap_backend_url') || DEFAULT_SWAP_BACKEND;
+      const swapUrl = isBrowser
+        ? (window.location.origin + '/api/swap-proxy')
+        : (storageGet('monerousd_swap_backend_url') || DEFAULT_SWAP_BACKEND);
       const res = await fetch(swapUrl + '/api/reserves');
       return await res.json();
     } catch (_) { return null; }
@@ -4904,8 +4906,20 @@ window.addEventListener('unhandledrejection', function(e) {
           importInFlight = false;
           setRpcStatus(true);
           showSyncStatus(isBrowser
-            ? 'Wallet restored. Connected to MoneroUSD relay. Syncing blockchain…'
+            ? 'Wallet restored. Syncing with blockchain… (this may take a minute)'
             : 'Wallet restored. Syncing blockchain…', true);
+          // In browser mode, wallet-rpc may still be scanning the blockchain after restore.
+          // Poll until it becomes responsive before making further RPC calls.
+          if (isBrowser) {
+            for (let w = 0; w < 120; w++) {
+              try {
+                const vr = await rpcImmediate('get_version', {}, { timeoutMs: 3000 });
+                if (vr && vr.version) break;
+              } catch (_) {}
+              if (w % 10 === 0 && w > 0) showSyncStatus('Wallet syncing with blockchain… (' + w + 's)', true);
+              await new Promise(ok => setTimeout(ok, 2000));
+            }
+          }
           await configureWalletRpcMoneroStyle().catch(() => {});
           await refreshAddress().catch(() => {});
           // Use incremental refresh (short batches) so we don't freeze the RPC

@@ -121,17 +121,27 @@ let localWalletRpc = null; // child_process for USDm-wallet-rpc
 let daemonLog = [];        // last 200 lines of daemon output
 const MAX_LOG_LINES = 200;
 
+function platformBinaryName(name) {
+  return process.platform === 'win32' ? name + '.exe' : name;
+}
+
 function findBinary(name) {
+  const bin = platformBinaryName(name);
   // Search order: bundled with app, local bin, dev builds, system-wide
   const candidates = [
-    path.join(process.resourcesPath || '', 'bin', name),
-    path.join(__dirname, 'bin', name),
-    path.join(__dirname, '..', 'MoneroUSD-main', 'build-linux', 'bin', name),
-    path.join(__dirname, '..', 'MoneroUSD-main', 'build', 'bin', name),
-    path.join(os.homedir(), '.monerousd', 'bin', name),
-    '/usr/local/bin/' + name,
-    '/usr/bin/' + name,
+    path.join(process.resourcesPath || '', 'bin', bin),
+    path.join(__dirname, 'bin', bin),
+    path.join(os.homedir(), '.monerousd', 'bin', bin),
   ];
+  // Dev / source builds (Linux/Mac only)
+  if (process.platform !== 'win32') {
+    candidates.push(
+      path.join(__dirname, '..', 'MoneroUSD-main', 'build-linux', 'bin', name),
+      path.join(__dirname, '..', 'MoneroUSD-main', 'build', 'bin', name),
+      '/usr/local/bin/' + name,
+      '/usr/bin/' + name,
+    );
+  }
   for (const p of candidates) {
     try {
       fs.accessSync(p, fs.constants.X_OK);
@@ -139,6 +149,52 @@ function findBinary(name) {
     } catch (_) {}
   }
   return null;
+}
+
+// Download daemon binaries from update server
+const BINARY_BASE_URL = 'https://update.monerousd.org/bin';
+async function downloadBinary(name, destDir) {
+  const bin = platformBinaryName(name);
+  const plat = process.platform === 'win32' ? 'win' : process.platform === 'darwin' ? 'mac' : 'linux';
+  const arch = process.arch === 'arm64' ? 'arm64' : 'x64';
+  const url = `${BINARY_BASE_URL}/${plat}-${arch}/${bin}`;
+  const dest = path.join(destDir, bin);
+
+  return new Promise((resolve, reject) => {
+    const file = fs.createWriteStream(dest);
+    const get = url.startsWith('https') ? https.get : http.get;
+    get(url, (res) => {
+      if (res.statusCode === 301 || res.statusCode === 302) {
+        // Follow redirect
+        const get2 = (res.headers.location || '').startsWith('https') ? https.get : http.get;
+        get2(res.headers.location, (res2) => {
+          if (res2.statusCode !== 200) {
+            file.close();
+            fs.unlinkSync(dest);
+            return reject(new Error(`Download failed: HTTP ${res2.statusCode}`));
+          }
+          res2.pipe(file);
+          file.on('finish', () => {
+            file.close();
+            if (process.platform !== 'win32') fs.chmodSync(dest, 0o755);
+            resolve(dest);
+          });
+        }).on('error', (e) => { file.close(); try { fs.unlinkSync(dest); } catch(_){} reject(e); });
+        return;
+      }
+      if (res.statusCode !== 200) {
+        file.close();
+        try { fs.unlinkSync(dest); } catch(_){}
+        return reject(new Error(`Download failed: HTTP ${res.statusCode}. Binaries for your platform may not be available yet.`));
+      }
+      res.pipe(file);
+      file.on('finish', () => {
+        file.close();
+        if (process.platform !== 'win32') fs.chmodSync(dest, 0o755);
+        resolve(dest);
+      });
+    }).on('error', (e) => { file.close(); try { fs.unlinkSync(dest); } catch(_){} reject(e); });
+  });
 }
 
 function getDataDir() {
@@ -194,9 +250,16 @@ ipcMain.handle('local-node-start', async (event, { rpcPort = 17750, p2pPort = 17
     return { ok: true, message: 'Daemon already running', pid: localDaemon.pid };
   }
 
-  const binary = findBinary('USDmd');
+  let binary = findBinary('USDmd');
   if (!binary) {
-    return { ok: false, error: 'USDmd binary not found. Place it in ~/.monerousd/bin/ or install system-wide.' };
+    // Try auto-download
+    const binDir = path.join(getDataDir(), 'bin');
+    if (!fs.existsSync(binDir)) fs.mkdirSync(binDir, { recursive: true });
+    try {
+      binary = await downloadBinary('USDmd', binDir);
+    } catch (dlErr) {
+      return { ok: false, error: 'USDmd binary not found and download failed: ' + dlErr.message + '. Place it in ~/.monerousd/bin/' };
+    }
   }
 
   const dataDir = getDataDir();
@@ -359,29 +422,17 @@ ipcMain.handle('local-node-setup', async (event, { seedNodes = [] } = {}) => {
     }
   }
 
-  // Step 2: Find or install daemon binary
+  // Step 2: Find or download daemon binary
   let daemonPath = findBinary('USDmd');
   if (!daemonPath) {
-    // Try to find source binary to copy
-    const sourceCandidates = [
-      path.join(__dirname, '..', 'MoneroUSD-main', 'build-linux', 'bin', 'USDmd'),
-      path.join(__dirname, '..', 'MoneroUSD-main', 'build', 'bin', 'USDmd'),
-    ];
-    for (const src of sourceCandidates) {
-      try {
-        fs.accessSync(src, fs.constants.R_OK);
-        const dest = path.join(binDir, 'USDmd');
-        fs.copyFileSync(src, dest);
-        fs.chmodSync(dest, 0o755);
-        daemonPath = dest;
-        steps.push('Installed USDmd to ' + dest);
-        break;
-      } catch (_) {}
-    }
-    if (!daemonPath) {
+    steps.push('USDmd not found locally, downloading…');
+    try {
+      daemonPath = await downloadBinary('USDmd', binDir);
+      steps.push('Downloaded USDmd to ' + daemonPath);
+    } catch (dlErr) {
       return {
         ok: false,
-        error: 'USDmd binary not found. Build from source: cd MoneroUSD-main && make release',
+        error: 'Could not download USDmd: ' + dlErr.message + '. You can manually place the binary in ~/.monerousd/bin/',
         steps,
       };
     }
@@ -389,26 +440,17 @@ ipcMain.handle('local-node-setup', async (event, { seedNodes = [] } = {}) => {
     steps.push('Found USDmd at ' + daemonPath);
   }
 
-  // Step 3: Find or install wallet-rpc binary
+  // Step 3: Find or download wallet-rpc binary
   let walletRpcPath = findBinary('USDm-wallet-rpc');
   if (!walletRpcPath) {
-    const sourceCandidates = [
-      path.join(__dirname, '..', 'MoneroUSD-main', 'build-linux', 'bin', 'USDm-wallet-rpc'),
-      path.join(__dirname, '..', 'MoneroUSD-main', 'build', 'bin', 'USDm-wallet-rpc'),
-    ];
-    for (const src of sourceCandidates) {
-      try {
-        fs.accessSync(src, fs.constants.R_OK);
-        const dest = path.join(binDir, 'USDm-wallet-rpc');
-        fs.copyFileSync(src, dest);
-        fs.chmodSync(dest, 0o755);
-        walletRpcPath = dest;
-        steps.push('Installed USDm-wallet-rpc to ' + dest);
-        break;
-      } catch (_) {}
+    steps.push('USDm-wallet-rpc not found locally, downloading…');
+    try {
+      walletRpcPath = await downloadBinary('USDm-wallet-rpc', binDir);
+      steps.push('Downloaded USDm-wallet-rpc to ' + walletRpcPath);
+    } catch (dlErr) {
+      // wallet-rpc is optional for node-only setup
+      steps.push('USDm-wallet-rpc download failed (optional): ' + dlErr.message);
     }
-    // wallet-rpc is optional for node-only setup
-    if (walletRpcPath) steps.push('Found USDm-wallet-rpc');
   } else {
     steps.push('Found USDm-wallet-rpc at ' + walletRpcPath);
   }

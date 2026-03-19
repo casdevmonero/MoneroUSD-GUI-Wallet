@@ -5132,7 +5132,7 @@ window.addEventListener('unhandledrejection', function(e) {
               restore_height: actualRestoreHeight,
               language: 'English',
               autosave_current: false,
-            }, { timeoutMs: 120000 });
+            }, { timeoutMs: 600000 });
           } catch (e) {
             const em = String(e && e.message || '');
             if (/exists|already exists/i.test(em)) {

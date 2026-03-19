@@ -764,7 +764,7 @@ const server = http.createServer(async (req, res) => {
 
       const PROXY_TIMEOUT_MS = method === 'refresh' ? 600000
         : method === 'rescan_blockchain' ? 300000
-        : method === 'restore_deterministic_wallet' ? 120000
+        : method === 'restore_deterministic_wallet' ? 600000
         : method === 'set_daemon' ? 10000
         : 90000;
 

@@ -1010,6 +1010,55 @@ window.addEventListener('unhandledrejection', function(e) {
     usdmEl.textContent = '$' + formatAmount(amt);
   }
 
+  // ===== Pending Balance Display =====
+  // Shows incoming USDm from swaps that haven't been minted yet.
+  // Pending amounts are display-only — they are NOT included in
+  // lastUsdmBalanceAtomic, so send/stake/swap/lend/burn are blocked
+  // until the swap reaches 'minted' status and the balance is confirmed
+  // on-chain.
+
+  let lastPendingUsdmDisplay = 0;
+
+  async function calculatePendingUsdm() {
+    try {
+      const walletKey = currentWalletAddress || '';
+      if (!walletKey) return 0;
+      const swaps = await getSwapsForWalletAsync(walletKey);
+      let pendingTotal = 0;
+      for (const s of swaps) {
+        // Only count crypto→USDm swaps that are in-flight (not yet minted)
+        if (s.direction !== 'crypto_to_usdm') continue;
+        const st = s.status || '';
+        // Pending statuses: awaiting_deposit, deposit_detected, deposit_confirmed,
+        // minting, payout_in_progress — anything before 'minted'
+        if (st === 'minted' || st === 'payout_sent' || st === 'failed' || st === 'cancelled' || st === 'expired') continue;
+        const expected = parseFloat(s.expected_usdm || '0');
+        if (expected > 0) pendingTotal += expected;
+      }
+      return pendingTotal;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  function updatePendingBalanceDisplay(pendingAmount) {
+    const el = document.getElementById('pendingUsdm');
+    if (!el) return;
+    lastPendingUsdmDisplay = pendingAmount || 0;
+    if (pendingAmount > 0) {
+      el.innerHTML = '<span class="pending-dot"></span>+ $' + pendingAmount.toFixed(2) + ' pending';
+      el.classList.remove('hidden');
+    } else {
+      el.innerHTML = '';
+      el.classList.add('hidden');
+    }
+  }
+
+  async function refreshPendingBalance() {
+    const amount = await calculatePendingUsdm();
+    updatePendingBalanceDisplay(amount);
+  }
+
   function updateSendBalanceHint(rawInput) {
     const el = document.getElementById('sendBalanceHint');
     if (!el) return;
@@ -2100,6 +2149,7 @@ window.addEventListener('unhandledrejection', function(e) {
       lastUsdmBalanceAtomic = usdmDisplay;
       const balanceUsdmEl = document.getElementById('balanceUsdm');
       setBalanceDisplayAtomic(usdmDisplay);
+      refreshPendingBalance(); // Update pending swap USDm indicator
       updateSwapUsdmBalanceDisplay();
       document.dispatchEvent(new Event('swapBalanceUpdated'));
       updateSendBalanceHint((document.getElementById('sendAmount') || {}).value || '');
@@ -2133,6 +2183,7 @@ window.addEventListener('unhandledrejection', function(e) {
       setRpcStatus(noWallet); // connected but no wallet = still show Connected
       lastUsdmBalanceAtomic = 0n;
       setBalanceDisplayAtomic(0n);
+      updatePendingBalanceDisplay(0); // Clear pending on error
       updateSwapUsdmBalanceDisplay();
       document.dispatchEvent(new Event('swapBalanceUpdated'));
       updateSendBalanceHint((document.getElementById('sendAmount') || {}).value || '');
@@ -2870,6 +2921,8 @@ window.addEventListener('unhandledrejection', function(e) {
       await renderSwapHistory();
       // Also update the main dashboard Recent Activity box so swap status badges stay current
       refreshTransfers().catch(() => {});
+      // Update pending balance indicator on the dashboard
+      refreshPendingBalance();
     }
 
     let _historyRefreshInFlight = false;
@@ -3569,12 +3622,18 @@ window.addEventListener('unhandledrejection', function(e) {
     async function pollAllPendingSwaps() {
       const swaps = await getSwapsForWalletAsync(getSwapWalletKey());
       const pending = swaps.filter((s) => isSwapPending(s.status));
-      if (pending.length === 0) return; // Keep timer running — new swaps may appear
+      if (pending.length === 0) {
+        // No pending swaps — clear the pending display
+        updatePendingBalanceDisplay(0);
+        return;
+      }
+      let statusChanged = false;
       for (const s of pending) {
         try {
           const res = await swapFetch(`/api/swaps/${s.swap_id}`);
           if (!res) continue;
           if (res.status && res.status !== s.status) {
+            statusChanged = true;
             persistSwap({
               swap_id: s.swap_id, status: res.status,
               minted_tx: res.minted_tx, payout_tx: res.payout_tx, error: res.error,
@@ -3585,6 +3644,8 @@ window.addEventListener('unhandledrejection', function(e) {
           }
         } catch (_) {}
       }
+      // Refresh pending balance display after checking all swaps
+      refreshPendingBalance();
     }
   }
 

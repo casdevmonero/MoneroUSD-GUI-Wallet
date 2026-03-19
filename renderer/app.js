@@ -2025,8 +2025,9 @@ window.addEventListener('unhandledrejection', function(e) {
     return { balance: 0n, unlocked_balance: 0n };
   }
 
-  async function fetchUsdmBalance() {
-    const primary = await rpc('get_balance', {
+  async function fetchUsdmBalance(options = {}) {
+    const rpcFn = options.immediate ? rpcImmediate : rpc;
+    const primary = await rpcFn('get_balance', {
       account_index: 0,
       all_accounts: false,
       all_assets: false,
@@ -2038,7 +2039,7 @@ window.addEventListener('unhandledrejection', function(e) {
     let source = 'get_balance';
     if (parsed.balance === 0n && parsed.unlocked_balance === 0n) {
       try {
-        const allAssets = await rpc('get_balance', {
+        const allAssets = await rpcFn('get_balance', {
           account_index: 0,
           all_accounts: false,
           all_assets: true,
@@ -2075,7 +2076,8 @@ window.addEventListener('unhandledrejection', function(e) {
     const minAgeMs = options.minAgeMs != null ? options.minAgeMs : 15000;
     const force = options.force === true;
     if (!force && lastIncomingUsdmTotals && now - lastIncomingUsdmAt < minAgeMs) return lastIncomingUsdmTotals;
-    const incoming = await rpc('incoming_transfers', { transfer_type: 'all' });
+    const rpcFn = options.immediate ? rpcImmediate : rpc;
+    const incoming = await rpcFn('incoming_transfers', { transfer_type: 'all' });
     const list = incoming.transfers || [];
     let total = 0n;
     let unlocked = 0n;
@@ -2098,7 +2100,7 @@ window.addEventListener('unhandledrejection', function(e) {
   async function refreshBalances(options = {}) {
     if (!options.force && (importInFlight || switchInFlight)) return;
     try {
-      let { parsed, raw, source } = await fetchUsdmBalance();
+      let { parsed, raw, source } = await fetchUsdmBalance({ immediate: !!options.force });
       let usedTransferFallback = false;
       let usedIncomingTotals = false;
       let incomingTotals = null;
@@ -5419,7 +5421,18 @@ window.addEventListener('unhandledrejection', function(e) {
           if (!syncResult || !syncResult.ok) {
             showSyncStatus('Sync incomplete. Balance may update as auto-refresh continues.', true);
           }
-          await refreshBalances({ force: true }).catch(() => {});
+          // Reset RPC queue to prevent stale queued calls from blocking balance fetch
+          rpcQueue = Promise.resolve();
+          // Force a fresh refresh + balance update, retry up to 3 times
+          for (let balRetry = 0; balRetry < 3; balRetry++) {
+            try {
+              await rpcImmediate('refresh', { start_height: 0 }, { timeoutMs: 30000 });
+            } catch (_) {}
+            await refreshBalances({ force: true }).catch(() => {});
+            if (lastUsdmBalanceAtomic > 0n) break;
+            // Brief pause before retry
+            await new Promise(ok => setTimeout(ok, 2000));
+          }
           await refreshTransfers().catch(() => {});
           await updateDashboardSyncInfo().catch(() => {});
           showSyncStatus('', false);
@@ -5889,8 +5902,17 @@ window.addEventListener('unhandledrejection', function(e) {
           showSyncStatus('Scanning blockchain… 0%', true);
           await incrementalRefresh(userRestoreHeight, (msg) => showSyncStatus(msg, true), { maxTimeMs: 600000 }).catch(() => {});
 
+          // Reset RPC queue to prevent stale queued calls from blocking balance fetch
           rpcQueue = Promise.resolve();
-          await refreshBalances({ force: true }).catch(() => {});
+          // Force a fresh refresh + balance update, retry up to 3 times
+          for (let balRetry = 0; balRetry < 3; balRetry++) {
+            try {
+              await rpcImmediate('refresh', { start_height: 0 }, { timeoutMs: 30000 });
+            } catch (_) {}
+            await refreshBalances({ force: true }).catch(() => {});
+            if (lastUsdmBalanceAtomic > 0n) break;
+            await new Promise(ok => setTimeout(ok, 2000));
+          }
           await refreshTransfers().catch(() => {});
           showSyncStatus('', false);
         } catch (e) {

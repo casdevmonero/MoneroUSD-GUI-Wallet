@@ -273,6 +273,23 @@ const net = require('net');
       }
     }
   } catch (_) {}
+
+  // Also clean up stale session directories from previous server crashes
+  try {
+    const dirs = fs.readdirSync(SESSION_DIR_BASE);
+    let cleaned = 0;
+    for (const d of dirs) {
+      const full = path.join(SESSION_DIR_BASE, d);
+      try {
+        const stat = fs.statSync(full);
+        if (stat.isDirectory()) {
+          fs.rmSync(full, { recursive: true, force: true });
+          cleaned++;
+        }
+      } catch (_) {}
+    }
+    if (cleaned > 0) console.log('  Cleaned up ' + cleaned + ' stale session directories');
+  } catch (_) {}
 })();
 
 function isPortFree(port) {

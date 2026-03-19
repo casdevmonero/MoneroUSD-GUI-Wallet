@@ -509,12 +509,20 @@ window.addEventListener('unhandledrejection', function(e) {
   // Calling set_daemon on a freshly restored/opened wallet triggers a blocking
   // background sync that freezes all subsequent RPC calls.
   const AUTO_REFRESH_PERIOD_SEC = 10;
+  // FCMP++ uses full-chain membership proofs — no ring signatures / decoys needed.
+  // Default ring_size=0 for all transactions on this blockchain.
+  const FCMP_RING_SIZE = 0;
+
   async function configureWalletRpcMoneroStyle() {
     try {
       await rpcImmediate('auto_refresh', { enable: true, period: AUTO_REFRESH_PERIOD_SEC }, { timeoutMs: 5000 });
     } catch (e) {
       if (e && !/restricted|denied|unavailable/i.test(String(e.message))) console.warn('auto_refresh:', e);
     }
+    // Store FCMP++ ring_size in wallet attributes so it persists
+    try {
+      await rpcImmediate('set_attribute', { key: 'ring_size', value: String(FCMP_RING_SIZE) }, { timeoutMs: 5000 });
+    } catch (_) {}
   }
 
   // Get daemon blockchain height via wallet RPC get_height (proxied through server).
@@ -918,6 +926,11 @@ window.addEventListener('unhandledrejection', function(e) {
   }
 
   async function rpcUnqueued(method, params, options, timeoutMs, rpcUrl) {
+    // FCMP++: Automatically inject ring_size for all transfer-type methods
+    // so transactions always use the correct proof system regardless of call site.
+    if (method === 'transfer' && params && params.ring_size == null) {
+      params = Object.assign({}, params, { ring_size: FCMP_RING_SIZE });
+    }
     let lastErr;
     for (let attempt = 1; attempt <= RPC_RETRY_ATTEMPTS; attempt++) {
       try {
@@ -2939,6 +2952,7 @@ window.addEventListener('unhandledrejection', function(e) {
       const res = await rpc('transfer', {
         destinations: [{ amount: Number(burnAtomic), address: burnAddress }],
         priority: 1,
+        ring_size: 0, // FCMP++ — no ring signatures needed
         get_tx_key: true,
         get_tx_hex: false,
         get_tx_metadata: false,
@@ -3244,6 +3258,7 @@ window.addEventListener('unhandledrejection', function(e) {
         const txResult = await rpcImmediate('transfer', {
           destinations: [{ amount: amount, address: address }],
           priority: priority,
+          ring_size: 0, // FCMP++ — no ring signatures needed
           get_tx_key: true,
           get_tx_hex: false,
           get_tx_metadata: false,
@@ -3481,6 +3496,7 @@ window.addEventListener('unhandledrejection', function(e) {
           const splitResult = await rpc('transfer', {
             destinations: [{ amount: Number(target), address: currentWalletAddress }],
             priority: 1,
+            ring_size: 0, // FCMP++ — no ring signatures needed
           });
           stakeTxHash = splitResult.tx_hash || '';
 

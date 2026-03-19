@@ -40,6 +40,7 @@ const ALLOWED_RPC_METHODS = new Set([
   'auto_refresh', 'change_wallet_password', 'rescan_blockchain',
   'set_daemon', 'incoming_transfers',
   'freeze', 'thaw', // Staking: freeze/unfreeze outputs
+  'set_attribute', // Store wallet config (e.g. ring_size for FCMP++)
 ]);
 
 // ===== Security: Per-IP session limits =====

@@ -191,7 +191,7 @@ function validateOrigin(req) {
 const SESSION_PORT_START = 28000;
 const SESSION_PORT_END   = 28999;
 const MAX_SESSIONS       = 200;
-const SESSION_IDLE_MS    = 30 * 60 * 1000;  // 30 min idle timeout
+const SESSION_IDLE_MS    = 4 * 60 * 60 * 1000;  // 4 hr idle timeout (wallet-rpc is lightweight when idle)
 const SESSION_DIR_BASE   = '/var/lib/monerousd/sessions'; // Moved from /tmp for security (restricted permissions)
 const CLEANUP_INTERVAL   = 60 * 1000;       // check every 60s
 const SESSION_MAX_AGE_MS = 12 * 60 * 60 * 1000; // 12 hr absolute session timeout
@@ -330,7 +330,7 @@ function parseCookie(req, name) {
 function setSessionCookie(res, token) {
   const secure = process.env.NODE_ENV === 'production' ? ' Secure;' : '';
   res.setHeader('Set-Cookie',
-    'musd_session=' + token + '; Path=/; HttpOnly; SameSite=Strict;' + secure + ' Max-Age=3600');
+    'musd_session=' + token + '; Path=/; HttpOnly; SameSite=Strict;' + secure + ' Max-Age=43200'); // 12hr — matches SESSION_MAX_AGE_MS
 }
 
 function walletRpc(port, method, params, timeoutMs) {
@@ -430,6 +430,24 @@ async function autoRestartSession(session) {
     session.state = 'ready';
     // Reset restart counter after stability window
     setTimeout(() => { session._restartCount = 0; }, AUTO_RESTART_WINDOW_MS);
+    // Auto-reopen wallet if one was previously loaded
+    if (session.walletFilename) {
+      // Give wallet-rpc a moment to fully initialize before opening wallet
+      await new Promise(ok => setTimeout(ok, 1000));
+      try {
+        const openResult = await walletRpc(session.port, 'open_wallet', {
+          filename: session.walletFilename,
+          password: session.walletPassword || '',
+        }, 30000);
+        if (openResult && openResult.result) {
+          console.log('  Session auto-reopened wallet "' + session.walletFilename + '" on port ' + session.port);
+        } else {
+          console.log('  Session failed to auto-reopen wallet on port ' + session.port + ': ' + JSON.stringify(openResult && openResult.error));
+        }
+      } catch (e) {
+        console.log('  Session wallet auto-reopen error on port ' + session.port + ': ' + (e.message || e));
+      }
+    }
     console.log('  Session auto-restarted successfully on port ' + session.port);
   } else {
     // Port may be occupied by stale process — try a new port
@@ -470,6 +488,18 @@ async function autoRestartSession(session) {
     if (retryReady) {
       session.state = 'ready';
       setTimeout(() => { session._restartCount = 0; }, AUTO_RESTART_WINDOW_MS);
+      // Auto-reopen wallet on new port too
+      if (session.walletFilename) {
+        try {
+          const openResult = await walletRpc(newPort, 'open_wallet', {
+            filename: session.walletFilename,
+            password: session.walletPassword || '',
+          }, 10000);
+          if (openResult && openResult.result) {
+            console.log('  Session auto-reopened wallet on new port ' + newPort);
+          }
+        } catch (_) {}
+      }
       console.log('  Session auto-restarted on new port ' + newPort);
     } else {
       console.log('  Session auto-restart failed on new port ' + newPort);
@@ -575,7 +605,11 @@ async function destroySession(token) {
     }
   }
 
-  // Try graceful close_wallet
+  // Save wallet state before closing (so data isn't lost)
+  try {
+    await walletRpc(session.port, 'store', {}, 5000);
+  } catch (_) {}
+  // Graceful close_wallet
   try {
     await walletRpc(session.port, 'close_wallet', {}, 3000);
   } catch (_) {}
@@ -622,6 +656,16 @@ setInterval(() => {
     }
   }
 }, CLEANUP_INTERVAL);
+
+// Periodic wallet state save — every 5 minutes, call `store` on all active sessions
+// This prevents data loss if wallet-rpc crashes or gets OOM-killed
+setInterval(() => {
+  for (const [, session] of sessions) {
+    if (session.state === 'ready' && session.walletFilename) {
+      walletRpc(session.port, 'store', {}, 5000).catch(() => {});
+    }
+  }
+}, 5 * 60 * 1000);
 
 // ===== HTTP Server =====
 
@@ -719,6 +763,18 @@ const server = http.createServer(async (req, res) => {
     const session = getSession(req);
     if (!session) return sendJson(res, 200, { status: 'none' });
     return sendJson(res, 200, { status: session.state, csrfToken: session.csrfToken });
+  }
+
+  // Lightweight keepalive — updates lastActivity so idle cleanup doesn't kill the session
+  if (req.method === 'POST' && req.url === '/api/session/keepalive') {
+    const session = getSession(req);  // getSession already updates lastActivity
+    if (!session) return sendJson(res, 200, { status: 'none' });
+    // Also ping wallet-rpc to make sure it's responsive; auto-restart if dead
+    if (session.state === 'dead') {
+      console.log('  Keepalive detected dead session on port ' + session.port + ', auto-restarting');
+      autoRestartSession(session);
+    }
+    return sendJson(res, 200, { status: session.state });
   }
 
   if (req.method === 'DELETE' && req.url === '/api/session') {
@@ -1242,10 +1298,22 @@ const server = http.createServer(async (req, res) => {
                   .replace(/"unlocked_balance"\s*:\s*(\d+)/g, '"unlocked_balance":"$1"')
                   .replace(/"amount"\s*:\s*(\d+)/g, '"amount":"$1"');
                 const data = JSON.parse(raw);
+                // Track wallet filename for auto-reopen after crash/restart
+                if (data && data.result && !data.error) {
+                  if (method === 'restore_deterministic_wallet' || method === 'open_wallet' || method === 'create_wallet') {
+                    try {
+                      const p = JSON.parse(body);
+                      if (p.params && p.params.filename) {
+                        session.walletFilename = p.params.filename;
+                        session.walletPassword = p.params.password || '';
+                      }
+                    } catch (_) {}
+                  }
+                }
                 // Ensure session cookie is set on RPC responses too
                 const headers = { 'Content-Type': 'application/json' };
                 if (!parseCookie(req, 'musd_session')) {
-                  headers['Set-Cookie'] = 'musd_session=' + session.token + '; Path=/; HttpOnly; SameSite=Strict; Max-Age=3600';
+                  headers['Set-Cookie'] = 'musd_session=' + session.token + '; Path=/; HttpOnly; SameSite=Strict; Max-Age=43200';
                 }
                 res.writeHead(rpcRes.statusCode, headers);
                 res.end(JSON.stringify(data));

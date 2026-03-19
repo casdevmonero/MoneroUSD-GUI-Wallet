@@ -5510,6 +5510,40 @@ window.addEventListener('unhandledrejection', function(e) {
     }
   }
 
+  // ===== Session Keepalive Heartbeat =====
+  // Sends a lightweight ping every 2 minutes to prevent idle timeout.
+  // Runs even when tab is in background (setInterval still fires, just throttled).
+  let keepaliveTimerId = null;
+  function startKeepalive() {
+    if (keepaliveTimerId) return;
+    keepaliveTimerId = setInterval(() => {
+      fetch('/api/session/keepalive', { method: 'POST', credentials: 'same-origin' })
+        .then(r => r.json())
+        .then(data => {
+          if (data.status === 'none') {
+            // Session was lost — if we have a wallet, the next RPC call will auto-create a new session
+            debugLog('[keepalive] Session expired on server');
+          } else if (data.status === 'dead') {
+            debugLog('[keepalive] Session dead, server is auto-restarting');
+          }
+        })
+        .catch(() => { /* network error, will retry next interval */ });
+    }, 120000); // every 2 minutes
+  }
+  function stopKeepalive() {
+    if (keepaliveTimerId) { clearInterval(keepaliveTimerId); keepaliveTimerId = null; }
+  }
+  // Start keepalive immediately — it's lightweight (no wallet-rpc call, just updates lastActivity)
+  startKeepalive();
+
+  // On visibility change: immediate keepalive + balance refresh when coming back
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      // Immediate keepalive ping on tab focus
+      fetch('/api/session/keepalive', { method: 'POST', credentials: 'same-origin' }).catch(() => {});
+    }
+  });
+
   // ===== Welcome / Onboarding Page =====
   const WALLET_ONBOARDED_KEY = 'monerousd_onboarded';
 

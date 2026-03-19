@@ -845,15 +845,9 @@ const server = http.createServer(async (req, res) => {
   // --- Daemon RPC proxy (shared, requires session) ---
 
   if (req.method === 'POST' && req.url === '/daemon_rpc') {
-    // Require authenticated session + CSRF
-    const dSession = getSession(req);
-    if (!dSession) {
-      logSecurity('unauth_daemon_rpc', { ip: clientIp });
-      return sendJson(res, 401, { error: 'Session required' });
-    }
-    if (dSession.csrfToken && (req.headers['x-csrf-token'] || '') !== dSession.csrfToken) {
-      return sendJson(res, 403, { error: 'Invalid CSRF token' });
-    }
+    // Daemon RPC is read-only public info (get_info, get_block_count, etc.)
+    // No session auth required — daemon info is public on any Monero node.
+    // Rate limiting still applies via global rate limiter above.
     let body = '';
     let bodySize = 0;
     const MAX_BODY = 16 * 1024; // 16KB limit for daemon RPC
@@ -891,14 +885,18 @@ const server = http.createServer(async (req, res) => {
 
   const miningRestPaths = ['/start_mining', '/stop_mining', '/mining_status'];
   if (miningRestPaths.includes(req.url.split('?')[0])) {
-    // Require authenticated session + CSRF
-    const mSession = getSession(req);
-    if (!mSession) {
-      logSecurity('unauth_mining', { ip: clientIp, path: req.url });
-      return sendJson(res, 401, { error: 'Session required' });
-    }
-    if (mSession.csrfToken && (req.headers['x-csrf-token'] || '') !== mSession.csrfToken) {
-      return sendJson(res, 403, { error: 'Invalid CSRF token' });
+    // start_mining and stop_mining require authenticated session + CSRF
+    // mining_status is read-only (daemon info) and doesn't require auth
+    const miningPath = req.url.split('?')[0];
+    if (miningPath === '/start_mining' || miningPath === '/stop_mining') {
+      const mSession = getSession(req);
+      if (!mSession) {
+        logSecurity('unauth_mining', { ip: clientIp, path: req.url });
+        return sendJson(res, 401, { error: 'Session required' });
+      }
+      if (mSession.csrfToken && (req.headers['x-csrf-token'] || '') !== mSession.csrfToken) {
+        return sendJson(res, 403, { error: 'Invalid CSRF token' });
+      }
     }
     let body = '';
     let bodySize = 0;

@@ -5256,18 +5256,25 @@ window.addEventListener('unhandledrejection', function(e) {
 
         let restoredFresh = false;
         let result;
-        // Restore at the actual user height (or 0 for full scan).
-        const actualHeight = restoreHeight || 0;
+        // Two-phase restore: create wallet instantly at daemon tip, then rescan.
+        // This lets biometric registration happen BEFORE the slow blockchain scan.
+        const userHeight = restoreHeight || 0;
+        let daemonTipHeight = 0;
         try {
-          showMessage('importMessage', 'Restoring and scanning wallet…', false);
+          daemonTipHeight = await getDaemonHeight() || 0;
+        } catch (_) {}
+        // Phase 1: Create wallet at daemon tip (instant, no scan)
+        const instantHeight = daemonTipHeight > 0 ? daemonTipHeight : 99999999;
+        try {
+          showMessage('importMessage', 'Creating wallet…', false);
           result = await rpcImmediate('restore_deterministic_wallet', {
             seed: seed,
             password: password,
             filename: filename,
-            restore_height: actualHeight,
+            restore_height: instantHeight,
             language: language,
             autosave_current: true,
-          }, { timeoutMs: 120000 });
+          }, { timeoutMs: 30000 });
           restoredFresh = true;
         } catch (restoreErr) {
           const restoreMsg = String((restoreErr && restoreErr.message) || '');
@@ -5297,7 +5304,7 @@ window.addEventListener('unhandledrejection', function(e) {
         renderAddressbook();
         setRpcStatus(true);
 
-        // Biometric registration if toggle checked (new wallets without existing credential)
+        // Biometric registration BEFORE scanning — wallet is created, we have the address
         if (addr) {
           currentWalletAddress = addr;
           await notifyServerWalletAddress(addr);
@@ -5332,10 +5339,13 @@ window.addEventListener('unhandledrejection', function(e) {
           const importedName = filename;
           await configureWalletRpcMoneroStyle().catch(() => {});
           await refreshAddress().catch(() => {});
-          // The restore creates the wallet but doesn't scan. Use incrementalRefresh
-          // for scanning with progress. getDaemonHeight() now queries the daemon directly.
+          // Phase 2: Rescan blockchain from the user's desired height, then incrementalRefresh
+          if (restoredFresh) {
+            showSyncStatus('Preparing blockchain scan…', true);
+            await rpcImmediate('rescan_blockchain', { hard: false }, { timeoutMs: 300000 }).catch(() => {});
+          }
           showSyncStatus('Scanning blockchain… 0%', true);
-          const syncResult = await incrementalRefresh(restoreHeight || 0, (msg) => {
+          const syncResult = await incrementalRefresh(userHeight, (msg) => {
             if (getActiveWalletName() === importedName) showSyncStatus(msg, true);
           }, { maxTimeMs: 600000 }).catch(() => ({ ok: false }));
           if (getActiveWalletName() !== importedName) return;
@@ -5729,25 +5739,32 @@ window.addEventListener('unhandledrejection', function(e) {
           showSyncStatus(isBrowser ? 'Connected to relay. Restoring wallet…' : 'Restoring wallet…', true);
           await rpcImmediate('close_wallet', {}, { timeoutMs: 5000 }).catch(() => {});
 
-          const actualRestoreHeight = restoreHeight || 0;
+          const userRestoreHeight = restoreHeight || 0;
+
+          // Two-phase restore: create wallet instantly at daemon tip, then rescan.
+          // This lets biometric registration happen BEFORE the slow blockchain scan.
+          let daemonTipHeight = 0;
+          try { daemonTipHeight = await getDaemonHeight() || 0; } catch (_) {}
+          const instantHeight = daemonTipHeight > 0 ? daemonTipHeight : 99999999;
+          let restoredFresh = false;
 
           try {
-            showSyncStatus('Restoring and scanning wallet…', true);
+            showSyncStatus('Creating wallet…', true);
             await rpcNoRetry('restore_deterministic_wallet', {
               seed: seed,
               password: password,
               filename: filename,
-              restore_height: actualRestoreHeight,
+              restore_height: instantHeight,
               language: 'English',
               autosave_current: false,
-            }, { timeoutMs: 600000 });
+            }, { timeoutMs: 30000 });
+            restoredFresh = true;
           } catch (e) {
             const em = String(e && e.message || '');
             if (/exists|already exists/i.test(em)) {
               try {
                 await rpcImmediate('open_wallet', { filename: filename, password: password || '' }, { timeoutMs: 30000 });
               } catch (openErr) {
-                const openMsg = String(openErr && openErr.message || '');
                 debugLog('open_wallet failed after exists');
                 showSyncStatus('Wallet cache may be corrupted. Retrying…', true);
                 await rpcImmediate('close_wallet', {}, { timeoutMs: 5000 }).catch(() => {});
@@ -5772,7 +5789,7 @@ window.addEventListener('unhandledrejection', function(e) {
           }
           clearTimeout(restoreWatchdog);
 
-          // Wallet is created — show address and UI immediately
+          // Wallet is created instantly — show address and UI immediately
           importInFlight = false;
           setRpcStatus(true);
           showSyncStatus('Wallet restored. Loading address…', true);
@@ -5780,7 +5797,7 @@ window.addEventListener('unhandledrejection', function(e) {
           await configureWalletRpcMoneroStyle().catch(() => {});
           await refreshAddress().catch(() => {});
 
-          // Biometric registration if toggle checked (offer for wallets without existing credential)
+          // Biometric registration BEFORE scanning — wallet is created, we have the address
           if (currentWalletAddress) {
             await notifyServerWalletAddress(currentWalletAddress);
             const bioAlready = await checkBiometricStatus(currentWalletAddress).catch(() => ({ registered: false }));
@@ -5797,11 +5814,13 @@ window.addEventListener('unhandledrejection', function(e) {
 
           startBalanceRefreshInterval();
 
-          // The restore creates the wallet but does NOT scan the blockchain.
-          // Use incrementalRefresh to scan with progress reporting.
-          // getDaemonHeight() now queries the actual daemon, so progress is accurate.
+          // Phase 2: Rescan blockchain from 0, then incrementalRefresh with live progress
+          if (restoredFresh) {
+            showSyncStatus('Preparing blockchain scan…', true);
+            await rpcImmediate('rescan_blockchain', { hard: false }, { timeoutMs: 300000 }).catch(() => {});
+          }
           showSyncStatus('Scanning blockchain… 0%', true);
-          await incrementalRefresh(actualRestoreHeight, (msg) => showSyncStatus(msg, true), { maxTimeMs: 600000 }).catch(() => {});
+          await incrementalRefresh(userRestoreHeight, (msg) => showSyncStatus(msg, true), { maxTimeMs: 600000 }).catch(() => {});
 
           rpcQueue = Promise.resolve();
           await refreshBalances({ force: true }).catch(() => {});

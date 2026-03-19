@@ -165,7 +165,9 @@ async function autoRestartSession(session) {
     '--daemon-address', DAEMON_ADDRESS,
     '--trusted-daemon',
     '--log-file', path.join(session.walletDir, 'wallet-rpc.log'),
-    '--log-level', '1',
+    '--log-level', '0',
+    '--max-concurrency', '4',
+    '--non-interactive',
   ];
 
   const proc = spawn(WALLET_RPC_BIN, args, {
@@ -227,7 +229,9 @@ async function createSession() {
     '--daemon-address', DAEMON_ADDRESS,
     '--trusted-daemon',
     '--log-file', path.join(walletDir, 'wallet-rpc.log'),
-    '--log-level', '1',
+    '--log-level', '0',
+    '--max-concurrency', '4',
+    '--non-interactive',
   ];
 
   const proc = spawn(WALLET_RPC_BIN, args, {

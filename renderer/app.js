@@ -383,7 +383,7 @@ window.addEventListener('unhandledrejection', function(e) {
   // This avoids timeout on large chains and keeps the UI responsive.
   async function incrementalRefresh(startHeight, onProgress, options = {}) {
     syncCancelled = false;
-    const BATCH_TIMEOUT = 15000;
+    const BATCH_TIMEOUT = 30000;
     const maxTime = options.maxTimeMs || 600000;
     const began = Date.now();
     let totalFetched = 0;
@@ -4500,15 +4500,23 @@ window.addEventListener('unhandledrejection', function(e) {
         const filename = 'monerousd_main.wallet';
         let restoredFresh = false;
         let result;
+        // Fetch daemon height to use as restore_height for fast wallet creation
+        let dTipHeight = 0;
         try {
+          const dH = await getDaemonHeight();
+          if (dH > 10) dTipHeight = dH;
+        } catch (_) {}
+        const fastHeight = dTipHeight > 10 ? dTipHeight : (restoreHeight || 1);
+        try {
+          showMessage('importMessage', 'Creating wallet…', false);
           result = await rpcImmediate('restore_deterministic_wallet', {
             seed: seed,
             password: password,
             filename: filename,
-            restore_height: restoreHeight,
+            restore_height: fastHeight,
             language: language,
             autosave_current: true,
-          }, { timeoutMs: 180000 });
+          }, { timeoutMs: 120000 });
           restoredFresh = true;
         } catch (restoreErr) {
           const restoreMsg = String((restoreErr && restoreErr.message) || '');
@@ -4555,46 +4563,17 @@ window.addEventListener('unhandledrejection', function(e) {
         }
         (async function runSyncInBackground() {
           const importedName = filename;
-          // Enable auto_refresh so wallet keeps syncing in background
           await configureWalletRpcMoneroStyle().catch(() => {});
-          // Refresh in a loop with generous timeout — chain may have many blocks
-          const MAX_SYNC_ATTEMPTS = 15;
-          let synced = false;
-          for (let attempt = 1; attempt <= MAX_SYNC_ATTEMPTS; attempt++) {
-            if (getActiveWalletName() !== importedName) return;
-            try {
-              const heightInfo = await rpcImmediate('get_height', {}, { timeoutMs: 5000 }).catch(() => null);
-              const walletH = (heightInfo && heightInfo.height) || 0;
-              const daemonH = await getDaemonHeight();
-              const remaining = Math.max(0, daemonH - walletH);
-              if (remaining > 0) {
-                showSyncStatus('Syncing… ' + walletH + ' / ' + daemonH + ' blocks remaining', true);
-              } else if (walletH > 0) {
-                showSyncStatus('Syncing…', true);
-              }
-              // Check if already fully synced
-              if (walletH > 0 && remaining <= 0) {
-                synced = true;
-                break;
-              }
-              await rpcImmediate('refresh', { start_height: 0 }, { timeoutMs: 120000 });
-              // Check height again after refresh
-              const after = await rpcImmediate('get_height', {}, { timeoutMs: 5000 }).catch(() => null);
-              if (after && after.height >= daemonH) {
-                synced = true;
-                break;
-              }
-            } catch (_) {}
-            if (attempt < MAX_SYNC_ATTEMPTS) {
-              await new Promise(ok => setTimeout(ok, 3000));
-            }
-          }
-          if (!synced && getActiveWalletName() === importedName) {
-            showSyncStatus('Sync incomplete. Balance may update shortly as auto-refresh continues.', true);
-          }
-          // Only update UI if this wallet is still the active one
-          if (getActiveWalletName() !== importedName) return;
           await refreshAddress().catch(() => {});
+          // Scan from user's restore height (0 = full chain) with progress
+          showSyncStatus('Scanning blockchain history… 0%', true);
+          const syncResult = await incrementalRefresh(restoreHeight || 0, (msg) => {
+            if (getActiveWalletName() === importedName) showSyncStatus(msg, true);
+          }, { maxTimeMs: 600000 }).catch(() => ({ ok: false }));
+          if (getActiveWalletName() !== importedName) return;
+          if (!syncResult || !syncResult.ok) {
+            showSyncStatus('Sync incomplete. Balance may update as auto-refresh continues.', true);
+          }
           await refreshBalances({ force: true }).catch(() => {});
           await refreshTransfers().catch(() => {});
           await updateDashboardSyncInfo().catch(() => {});
@@ -4938,44 +4917,62 @@ window.addEventListener('unhandledrejection', function(e) {
       (async function backgroundRestore() {
         try {
           rpcQueue = Promise.resolve();
-          setRpcStatus(true); // relay session is active
+          setRpcStatus(true);
           showSyncStatus(isBrowser ? 'Connected to relay. Restoring wallet from seed…' : 'Restoring wallet from seed…', true);
           await rpcImmediate('close_wallet', {}, { timeoutMs: 5000 }).catch(() => {});
+
+          // Fetch daemon height so we can restore at tip for instant wallet creation
+          let daemonTipHeight = 0;
+          if (isBrowser) {
+            try {
+              const dResp = await fetch(window.location.origin + '/daemon_rpc', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'same-origin',
+                body: JSON.stringify({ jsonrpc: '2.0', id: '0', method: 'get_info', params: {} }),
+              });
+              const dData = await dResp.json();
+              daemonTipHeight = (dData && dData.result && dData.result.height) || 0;
+            } catch (_) {}
+          }
+
+          // Use daemon tip height for restore so wallet-rpc doesn't block scanning
+          // the entire chain. We'll scan history separately via refresh().
+          const fastRestoreHeight = daemonTipHeight > 10 ? daemonTipHeight : (restoreHeight || 1);
+          const userScanHeight = restoreHeight || 0; // where to start background scan
+
           try {
+            showSyncStatus('Creating wallet…', true);
             await rpcNoRetry('restore_deterministic_wallet', {
               seed: seed,
               password: password,
               filename: filename,
-              restore_height: restoreHeight || 1,
+              restore_height: fastRestoreHeight,
               language: 'English',
               autosave_current: false,
-            }, { timeoutMs: 300000 });
+            }, { timeoutMs: 120000 });
           } catch (e) {
             const em = String(e && e.message || '');
             if (/exists|already exists/i.test(em)) {
               try {
                 await rpcImmediate('open_wallet', { filename: filename, password: password || '' }, { timeoutMs: 30000 });
               } catch (openErr) {
-                // open_wallet can fail if the cache files are corrupted — the .keys file
-                // is fine but the .wallet cache is incompatible. Show a helpful message.
                 const openMsg = String(openErr && openErr.message || '');
                 console.warn('open_wallet failed after exists:', openMsg);
-                showSyncStatus('Wallet cache may be corrupted. Retrying with fresh restore…', true);
-                // Try closing then restoring fresh — wallet-rpc may have partially opened
+                showSyncStatus('Wallet cache may be corrupted. Retrying…', true);
                 await rpcImmediate('close_wallet', {}, { timeoutMs: 5000 }).catch(() => {});
-                // If we can't open, try restoring again (wallet-rpc may allow overwrite after close)
                 throw openErr;
               }
             } else {
               if (/timed out|abort|timeout/i.test(em)) {
                 showSyncStatus(isBrowser
                   ? 'Restore timed out — the server may be busy. Click Refresh to retry.'
-                  : 'Restore timed out — the wallet RPC is not responding. Make sure the wallet RPC and daemon are running, then click Refresh to retry.', true);
+                  : 'Restore timed out. Make sure daemon and wallet RPC are running.', true);
               } else if (/fetch|network|refused|unreachable|ECONNREFUSED/i.test(em)) {
                 if (isBrowser) setRpcStatus(false);
                 showSyncStatus(isBrowser
                   ? 'Cannot reach the wallet server. Try refreshing the page.'
-                  : 'Cannot reach wallet RPC. Start it with: ./start-wallet-rpc.sh — then click Refresh to retry.', true);
+                  : 'Cannot reach wallet RPC. Start it then click Refresh.', true);
               } else {
                 showSyncStatus('Restore failed: ' + (e.message || 'Unknown error') + '. Click Refresh to retry.', true);
               }
@@ -4984,41 +4981,35 @@ window.addEventListener('unhandledrejection', function(e) {
             }
           }
           clearTimeout(restoreWatchdog);
-          // Wallet is now open — sync it
-          // Do NOT call set_daemon — wallet-rpc already has --daemon-address from
-          // startup, and calling set_daemon on a freshly restored wallet triggers a
-          // blocking background sync that freezes all subsequent RPC calls.
+
+          // Wallet is created — show address and UI immediately
           importInFlight = false;
           setRpcStatus(true);
-          showSyncStatus(isBrowser
-            ? 'Wallet restored. Syncing with blockchain… (this may take a minute)'
-            : 'Wallet restored. Syncing blockchain…', true);
-          // In browser mode, wallet-rpc may still be scanning the blockchain after restore.
-          // Poll until it becomes responsive before making further RPC calls.
-          if (isBrowser) {
-            for (let w = 0; w < 120; w++) {
-              try {
-                const vr = await rpcImmediate('get_version', {}, { timeoutMs: 3000 });
-                if (vr && vr.version) break;
-              } catch (_) {}
-              if (w % 10 === 0 && w > 0) showSyncStatus('Wallet syncing with blockchain… (' + w + 's)', true);
-              await new Promise(ok => setTimeout(ok, 2000));
-            }
-          }
+          showSyncStatus('Wallet restored. Loading address…', true);
+
           await configureWalletRpcMoneroStyle().catch(() => {});
           await refreshAddress().catch(() => {});
-          // Use incremental refresh (short batches) so we don't freeze the RPC
-          await setDaemonAndRefresh(restoreHeight || 0, (msg) => showSyncStatus(msg, true)).catch(() => {});
+          startBalanceRefreshInterval();
+
+          // Now scan blockchain history in the background with progress
+          if (daemonTipHeight > 0 && userScanHeight < daemonTipHeight) {
+            showSyncStatus('Scanning blockchain history… 0%', true);
+            // Use incremental refresh with progress reporting
+            await incrementalRefresh(userScanHeight, (msg) => showSyncStatus(msg, true), { maxTimeMs: 600000 }).catch(() => {});
+          } else {
+            // Simple refresh
+            await rpcImmediate('refresh', { start_height: userScanHeight }, { timeoutMs: 120000 }).catch(() => {});
+          }
+
           rpcQueue = Promise.resolve();
           await refreshBalances({ force: true }).catch(() => {});
           await refreshTransfers().catch(() => {});
-          startBalanceRefreshInterval();
           showSyncStatus('', false);
         } catch (e) {
           const errMsg = (e.message || 'Unknown');
           const isCacheErr = /bad_alloc|corrupt|archive|portable_binary|Failed to open wallet/i.test(errMsg);
           if (isCacheErr) {
-            showSyncStatus('Wallet cache is corrupted. Delete the .wallet file from your wallet directory and import again.', true);
+            showSyncStatus('Wallet cache is corrupted. Delete the .wallet file and import again.', true);
           } else {
             showSyncStatus('Restore error: ' + errMsg + '. Click Refresh to retry.', true);
           }

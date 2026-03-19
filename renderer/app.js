@@ -1666,7 +1666,7 @@ window.addEventListener('unhandledrejection', function(e) {
   async function refreshBalances(options = {}) {
     if (!options.force && (importInFlight || switchInFlight)) return;
     try {
-      const { parsed, raw, source } = await fetchUsdmBalance();
+      let { parsed, raw, source } = await fetchUsdmBalance();
       let usedTransferFallback = false;
       let usedIncomingTotals = false;
       let incomingTotals = null;

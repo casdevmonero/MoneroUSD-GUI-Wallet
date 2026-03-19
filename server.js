@@ -173,12 +173,49 @@ const CONCURRENT_RPC_METHODS = new Set([
 
 const sessions = new Map();    // token -> SessionState
 const usedPorts = new Set();
+const net = require('net');
 
-function allocatePort() {
+// Kill stale wallet-rpc processes from previous server instances on startup
+(function cleanupStaleWalletRpc() {
+  try {
+    const { execSync } = require('child_process');
+    // Find wallet-rpc processes using session ports (not the main wallet-rpc on 27750)
+    const psOutput = execSync(
+      "ps aux | grep USDm-wallet-rpc | grep -v grep | grep -- '--rpc-bind-port 28' || true",
+      { encoding: 'utf8', timeout: 5000 }
+    ).trim();
+    if (psOutput) {
+      const pids = psOutput.split('\n').map(line => line.trim().split(/\s+/)[1]).filter(Boolean);
+      for (const pid of pids) {
+        try {
+          process.kill(parseInt(pid, 10), 'SIGKILL');
+          console.log('  Cleaned up stale wallet-rpc PID ' + pid);
+        } catch (_) {}
+      }
+    }
+  } catch (_) {}
+})();
+
+function isPortFree(port) {
+  return new Promise((resolve) => {
+    const srv = net.createServer();
+    srv.once('error', () => resolve(false));
+    srv.once('listening', () => { srv.close(() => resolve(true)); });
+    srv.listen(port, '127.0.0.1');
+  });
+}
+
+async function allocatePort() {
   for (let p = SESSION_PORT_START; p <= SESSION_PORT_END; p++) {
     if (!usedPorts.has(p)) {
-      usedPorts.add(p);
-      return p;
+      // Verify the port is actually free on the OS
+      const free = await isPortFree(p);
+      if (free) {
+        usedPorts.add(p);
+        return p;
+      } else {
+        console.log('  Port ' + p + ' in use by OS (stale process?), skipping');
+      }
     }
   }
   return null;
@@ -299,8 +336,49 @@ async function autoRestartSession(session) {
     setTimeout(() => { session._restartCount = 0; }, AUTO_RESTART_WINDOW_MS);
     console.log('  Session auto-restarted successfully on port ' + session.port);
   } else {
-    console.log('  Session auto-restart failed on port ' + session.port);
-    session.state = 'dead';
+    // Port may be occupied by stale process — try a new port
+    console.log('  Session auto-restart failed on port ' + session.port + ', trying new port');
+    try { session.process.kill('SIGKILL'); } catch (_) {}
+    releasePort(session.port);
+    const newPort = await allocatePort();
+    if (!newPort) {
+      console.log('  No free ports available for auto-restart');
+      session.state = 'dead';
+      return;
+    }
+    session.port = newPort;
+    const retryArgs = [
+      '--rpc-bind-ip', '127.0.0.1',
+      '--rpc-bind-port', String(newPort),
+      '--disable-rpc-login',
+      '--wallet-dir', session.walletDir,
+      '--daemon-address', DAEMON_ADDRESS,
+      '--trusted-daemon',
+      '--log-file', path.join(session.walletDir, 'wallet-rpc.log'),
+      '--log-level', '0',
+      '--max-concurrency', '4',
+      '--non-interactive',
+    ];
+    const retryProc = spawn(WALLET_RPC_BIN, retryArgs, { env, stdio: ['ignore', 'pipe', 'pipe'], detached: false });
+    session.process = retryProc;
+    retryProc.stderr.on('data', () => {});
+    retryProc.stdout.on('data', () => {});
+    retryProc.on('exit', (code2) => {
+      if (session.state !== 'closing') {
+        session.state = 'dead';
+        autoRestartSession(session);
+      }
+    });
+    retryProc.on('error', () => { session.state = 'dead'; });
+    const retryReady = await waitForWalletRpc(newPort, 10);
+    if (retryReady) {
+      session.state = 'ready';
+      setTimeout(() => { session._restartCount = 0; }, AUTO_RESTART_WINDOW_MS);
+      console.log('  Session auto-restarted on new port ' + newPort);
+    } else {
+      console.log('  Session auto-restart failed on new port ' + newPort);
+      session.state = 'dead';
+    }
   }
 }
 
@@ -308,7 +386,7 @@ async function createSession() {
   if (sessions.size >= MAX_SESSIONS) return null;
 
   const token = crypto.randomBytes(32).toString('hex');
-  const port = allocatePort();
+  const port = await allocatePort();
   if (!port) return null;
 
   const walletDir = path.join(SESSION_DIR_BASE, token);

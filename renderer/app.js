@@ -757,6 +757,54 @@ window.addEventListener('unhandledrejection', function(e) {
     });
   }
 
+  // Blocking auth modal — requires user tap to trigger Face ID / fingerprint.
+  // Resolves with { bioToken } on success, rejects on failure/cancel.
+  function showBiometricAuthModal(walletAddress) {
+    return new Promise((resolve, reject) => {
+      const existing = document.getElementById('biometricAuthModal');
+      if (existing) existing.remove();
+      const modal = document.createElement('div');
+      modal.id = 'biometricAuthModal';
+      modal.className = 'modal-overlay';
+      modal.innerHTML = '<div class="modal-box biometric-modal">'
+        + '<div class="biometric-icon">&#128274;</div>'
+        + '<h3>Biometric Required</h3>'
+        + '<p>This wallet is protected by biometric authentication. Verify your identity to continue.</p>'
+        + '<div class="biometric-modal-buttons">'
+        + '<button class="btn btn-primary" id="btnBioVerify">Tap to Verify Face ID / Fingerprint</button>'
+        + '<button class="btn btn-ghost" id="btnBioCancel">Cancel</button>'
+        + '</div>'
+        + '</div>';
+      document.body.appendChild(modal);
+
+      document.getElementById('btnBioVerify').addEventListener('click', async () => {
+        const btn = document.getElementById('btnBioVerify');
+        btn.disabled = true;
+        btn.textContent = 'Verifying...';
+        try {
+          const result = await webauthnAuthenticate(walletAddress);
+          modal.remove();
+          resolve(result);
+        } catch (e) {
+          btn.disabled = false;
+          btn.textContent = 'Tap to Verify Face ID / Fingerprint';
+          const msg = e.message || '';
+          if (/cancel|abort|not allowed/i.test(msg)) {
+            modal.remove();
+            reject(new Error('Biometric verification cancelled'));
+          } else {
+            alert('Biometric verification failed: ' + msg);
+          }
+        }
+      });
+
+      document.getElementById('btnBioCancel').addEventListener('click', () => {
+        modal.remove();
+        reject(new Error('Biometric verification cancelled'));
+      });
+    });
+  }
+
   function showBiometricToast(message) {
     const toast = document.createElement('div');
     toast.className = 'biometric-toast';
@@ -825,12 +873,16 @@ window.addEventListener('unhandledrejection', function(e) {
   // This avoids timeout on large chains and keeps the UI responsive.
   async function incrementalRefresh(startHeight, onProgress, options = {}) {
     syncCancelled = false;
-    const BATCH_TIMEOUT = 60000;
+    // Use short batch timeouts so refresh returns frequently for progress updates
+    const BATCH_TIMEOUT = 5000;
     const maxTime = options.maxTimeMs || 600000;
     const began = Date.now();
     let totalFetched = 0;
     let walletHeight = startHeight || 0;
     const daemonHeight = await getDaemonHeight() || 1;
+    let staleCount = 0; // track consecutive 0-fetch rounds
+
+    if (onProgress) onProgress('Syncing… block ' + walletHeight.toLocaleString() + ' / ' + daemonHeight.toLocaleString() + ' (0%)');
 
     while (Date.now() - began < maxTime) {
       if (syncCancelled) return { ok: false, blocks_fetched: totalFetched, cancelled: true };
@@ -843,21 +895,25 @@ window.addEventListener('unhandledrejection', function(e) {
         const hi = await rpcImmediate('get_height', {}, { timeoutMs: 5000 }).catch(() => null);
         walletHeight = (hi && hi.height) ? Number(hi.height) : walletHeight + fetched;
         const pct = daemonHeight > 0 ? Math.min(100, Math.round((walletHeight / daemonHeight) * 100)) : 0;
-        if (onProgress) onProgress('Syncing… ' + walletHeight.toLocaleString() + ' / ' + daemonHeight.toLocaleString() + ' blocks (' + pct + '%)');
-        // If we fetched 0 or wallet caught up, we're done
-        if (fetched === 0 || walletHeight >= daemonHeight) break;
+        if (onProgress) onProgress('Syncing… block ' + walletHeight.toLocaleString() + ' / ' + daemonHeight.toLocaleString() + ' (' + pct + '%)');
+        // If wallet caught up, done
+        if (walletHeight >= daemonHeight) break;
+        // If refresh returned 0 blocks multiple times, wallet is synced
+        if (fetched === 0) { staleCount++; if (staleCount >= 3) break; } else { staleCount = 0; }
       } catch (e) {
         if (syncCancelled) return { ok: false, blocks_fetched: totalFetched, cancelled: true };
         const msg = String((e && e.message) || '');
-        // Timeout is expected for large batches — just continue
+        // Timeout is expected — wallet-rpc processed some blocks but hit our 5s limit.
+        // Check height and continue.
         if (/timed out|abort/i.test(msg)) {
           const hi = await rpcImmediate('get_height', {}, { timeoutMs: 5000 }).catch(() => null);
-          walletHeight = (hi && hi.height) ? Number(hi.height) : walletHeight;
+          const newHeight = (hi && hi.height) ? Number(hi.height) : walletHeight;
+          if (newHeight > walletHeight) { totalFetched += (newHeight - walletHeight); walletHeight = newHeight; }
           const pct = daemonHeight > 0 ? Math.min(100, Math.round((walletHeight / daemonHeight) * 100)) : 0;
-          if (onProgress) onProgress('Syncing… ' + walletHeight.toLocaleString() + ' / ' + daemonHeight.toLocaleString() + ' blocks (' + pct + '%)');
+          if (onProgress) onProgress('Syncing… block ' + walletHeight.toLocaleString() + ' / ' + daemonHeight.toLocaleString() + ' (' + pct + '%)');
+          if (walletHeight >= daemonHeight) break;
           continue;
         }
-        // If wallet was closed (switch in progress), stop silently
         if (/no wallet|not open/i.test(msg)) return { ok: false, blocks_fetched: totalFetched, cancelled: true };
         throw e;
       }
@@ -5201,13 +5257,34 @@ window.addEventListener('unhandledrejection', function(e) {
         renderAddressbook();
         setRpcStatus(true);
 
-        // Biometric registration BEFORE showing wallet — blocks until user scans or skips
-        const importBioToggle = document.getElementById('importBiometricToggle');
-        if (importBioToggle && importBioToggle.checked && addr) {
+        // Biometric gate: if wallet already has biometric registered, REQUIRE scan before access
+        if (addr) {
           currentWalletAddress = addr;
           await notifyServerWalletAddress(addr);
-          showMessage('importMessage', '', false);
-          await showBiometricRegistrationModal(addr);
+          const bioStatus = await checkBiometricStatus(addr).catch(() => ({ registered: false }));
+          if (bioStatus.registered) {
+            // Wallet has biometric — must authenticate before access
+            showMessage('importMessage', '', false);
+            try {
+              const authResult = await webauthnAuthenticate(addr);
+              if (!authResult || !authResult.bioToken) throw new Error('Biometric verification failed');
+              showBiometricToast('Biometric verified.');
+            } catch (bioErr) {
+              // Failed or cancelled — close wallet and block access
+              await rpcImmediate('close_wallet', {}, { timeoutMs: 5000 }).catch(() => {});
+              showMessage('importMessage', 'Biometric verification required for this wallet. Access denied.', true);
+              importInFlight = false;
+              resumeAutoRefresh();
+              return;
+            }
+          } else {
+            // No biometric yet — offer registration if toggle is checked
+            const importBioToggle = document.getElementById('importBiometricToggle');
+            if (importBioToggle && importBioToggle.checked) {
+              showMessage('importMessage', '', false);
+              await showBiometricRegistrationModal(addr);
+            }
+          }
         }
 
         showMessage('importMessage', 'Wallet restored. Syncing in background…', false);
@@ -5664,12 +5741,29 @@ window.addEventListener('unhandledrejection', function(e) {
           await configureWalletRpcMoneroStyle().catch(() => {});
           await refreshAddress().catch(() => {});
 
-          // Register biometric BEFORE loading balance — blocks until user scans or skips
-          const restoreBioToggle = document.getElementById('restoreBiometricToggle');
-          if (restoreBioToggle && restoreBioToggle.checked && currentWalletAddress) {
+          // Biometric gate: if wallet already has biometric, REQUIRE scan before access
+          if (currentWalletAddress) {
             await notifyServerWalletAddress(currentWalletAddress);
-            showSyncStatus('', false);
-            await showBiometricRegistrationModal(currentWalletAddress);
+            const bioStatus = await checkBiometricStatus(currentWalletAddress).catch(() => ({ registered: false }));
+            if (bioStatus.registered) {
+              showSyncStatus('', false);
+              try {
+                const authResult = await webauthnAuthenticate(currentWalletAddress);
+                if (!authResult || !authResult.bioToken) throw new Error('Biometric verification failed');
+                showBiometricToast('Biometric verified.');
+              } catch (bioErr) {
+                await rpcImmediate('close_wallet', {}, { timeoutMs: 5000 }).catch(() => {});
+                showSyncStatus('Biometric verification required. Access denied.', true);
+                importInFlight = false;
+                return;
+              }
+            } else {
+              const restoreBioToggle = document.getElementById('restoreBiometricToggle');
+              if (restoreBioToggle && restoreBioToggle.checked) {
+                showSyncStatus('', false);
+                await showBiometricRegistrationModal(currentWalletAddress);
+              }
+            }
           }
 
           startBalanceRefreshInterval();

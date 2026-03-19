@@ -362,7 +362,7 @@ async function autoRestartSession(session) {
     '--trusted-daemon',
     '--log-file', path.join(session.walletDir, 'wallet-rpc.log'),
     '--log-level', '0',
-    '--max-concurrency', '4',
+    '--max-concurrency', '8',
     '--non-interactive',
   ];
 
@@ -416,7 +416,7 @@ async function autoRestartSession(session) {
       '--trusted-daemon',
       '--log-file', path.join(session.walletDir, 'wallet-rpc.log'),
       '--log-level', '0',
-      '--max-concurrency', '4',
+      '--max-concurrency', '8',
       '--non-interactive',
     ];
     const retryProc = spawn(WALLET_RPC_BIN, retryArgs, { env, stdio: ['ignore', 'pipe', 'pipe'], detached: false });
@@ -467,7 +467,7 @@ async function createSession() {
     '--trusted-daemon',
     '--log-file', path.join(walletDir, 'wallet-rpc.log'),
     '--log-level', '0',
-    '--max-concurrency', '4',
+    '--max-concurrency', '8',
     '--non-interactive',
   ];
 

@@ -744,10 +744,24 @@ const server = http.createServer(async (req, res) => {
       }
 
       let method = '';
+      let parsedBody;
       try {
-        const parsedBody = JSON.parse(body || '{}');
+        parsedBody = JSON.parse(body || '{}');
         method = (parsedBody.method || '').toString();
-      } catch (_) {}
+      } catch (_) {
+        parsedBody = {};
+      }
+
+      // FCMP++: Auto-inject ring_size=0 for transfer calls.
+      // FCMP++ uses full-chain membership proofs instead of ring signatures,
+      // so no decoy outputs are needed. Without this, wallet-rpc uses a default
+      // ring size that fails on this blockchain.
+      if (method === 'transfer' && parsedBody.params) {
+        if (parsedBody.params.ring_size == null) {
+          parsedBody.params.ring_size = 0;
+          body = JSON.stringify(parsedBody);
+        }
+      }
 
       // RPC method whitelist
       if (method && !ALLOWED_RPC_METHODS.has(method)) {

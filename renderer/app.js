@@ -5325,39 +5325,58 @@ window.addEventListener('unhandledrejection', function(e) {
 
         let restoredFresh = false;
         let result;
-        // Two-phase restore: create wallet instantly at daemon tip, then rescan.
-        // This lets biometric registration happen BEFORE the slow blockchain scan.
         const userHeight = restoreHeight || 0;
-        let daemonTipHeight = 0;
-        try {
-          daemonTipHeight = await getDaemonHeight() || 0;
-        } catch (_) {}
-        // Phase 1: Create wallet at daemon tip (instant, no scan)
-        const instantHeight = daemonTipHeight > 0 ? daemonTipHeight : 99999999;
+        // Restore wallet from block 0 (or user-specified height) so all transactions are found.
+        // rescan_blockchain does not work reliably on this wallet-rpc, so we always restore
+        // at the correct height from the start.
         try {
           showMessage('importMessage', 'Creating wallet…', false);
           result = await rpcImmediate('restore_deterministic_wallet', {
             seed: seed,
             password: password,
             filename: filename,
-            restore_height: instantHeight,
+            restore_height: userHeight,
             language: language,
             autosave_current: true,
           }, { timeoutMs: 30000 });
           restoredFresh = true;
         } catch (restoreErr) {
           const restoreMsg = String((restoreErr && restoreErr.message) || '');
-          // Wallet file already exists — just open it (same seed was imported before)
+          // Wallet file already exists — close, delete cache, re-restore from correct height
           if (/exists|already exists/i.test(restoreMsg)) {
             try {
-              await rpcImmediate('open_wallet', { filename: filename, password: password || '' }, { timeoutMs: 30000 });
-            } catch (openErr) {
-              debugLog('open_wallet failed, retrying');
               await rpcImmediate('close_wallet', {}, { timeoutMs: 5000 }).catch(() => {});
-              await rpcImmediate('open_wallet', { filename: filename, password: password || '' }, { timeoutMs: 30000 });
+              // Delete the .wallet cache file via server so re-restore scans from block 0.
+              // The .wallet.keys file is preserved (contains the keys from the seed).
+              try {
+                await fetch(getFetchUrl() + '/delete_wallet_cache', {
+                  method: 'POST',
+                  headers: getRpcHeaders(),
+                  credentials: 'same-origin',
+                  body: JSON.stringify({ filename: filename }),
+                });
+              } catch (_) {}
+              result = await rpcImmediate('restore_deterministic_wallet', {
+                seed: seed,
+                password: password,
+                filename: filename,
+                restore_height: userHeight,
+                language: language,
+                autosave_current: true,
+              }, { timeoutMs: 30000 });
+              restoredFresh = true;
+            } catch (retryErr) {
+              // If re-restore also fails with "already exists", just open it
+              const retryMsg = String((retryErr && retryErr.message) || '');
+              if (/exists|already exists/i.test(retryMsg)) {
+                await rpcImmediate('open_wallet', { filename: filename, password: password || '' }, { timeoutMs: 30000 });
+                result = await rpcImmediate('get_address', { account_index: 0 }, { timeoutMs: 8000 }).catch(() => ({}));
+                restoredFresh = true;
+              } else {
+                throw retryErr;
+              }
             }
             if (password) walletPasswordCache.set(sanitizeWalletName(filename), password);
-            result = await rpcImmediate('get_address', { account_index: 0 }, { timeoutMs: 8000 }).catch(() => ({}));
           } else {
             throw restoreErr;
           }
@@ -5820,21 +5839,18 @@ window.addEventListener('unhandledrejection', function(e) {
           await rpcImmediate('close_wallet', {}, { timeoutMs: 5000 }).catch(() => {});
 
           const userRestoreHeight = restoreHeight || 0;
-
-          // Two-phase restore: create wallet instantly at daemon tip, then rescan.
-          // This lets biometric registration happen BEFORE the slow blockchain scan.
-          let daemonTipHeight = 0;
-          try { daemonTipHeight = await getDaemonHeight() || 0; } catch (_) {}
-          const instantHeight = daemonTipHeight > 0 ? daemonTipHeight : 99999999;
           let restoredFresh = false;
 
+          // Restore wallet from block 0 (or user-specified height) so all transactions are found.
+          // rescan_blockchain does not work reliably on this wallet-rpc, so we always restore
+          // at the correct height from the start.
           try {
             showSyncStatus('Creating wallet…', true);
             await rpcNoRetry('restore_deterministic_wallet', {
               seed: seed,
               password: password,
               filename: filename,
-              restore_height: instantHeight,
+              restore_height: userRestoreHeight,
               language: 'English',
               autosave_current: false,
             }, { timeoutMs: 30000 });
@@ -5842,13 +5858,34 @@ window.addEventListener('unhandledrejection', function(e) {
           } catch (e) {
             const em = String(e && e.message || '');
             if (/exists|already exists/i.test(em)) {
+              // Wallet cache exists from a prior session — close, delete cache, re-restore
               try {
-                await rpcImmediate('open_wallet', { filename: filename, password: password || '' }, { timeoutMs: 30000 });
-              } catch (openErr) {
-                debugLog('open_wallet failed after exists');
-                showSyncStatus('Wallet cache may be corrupted. Retrying…', true);
                 await rpcImmediate('close_wallet', {}, { timeoutMs: 5000 }).catch(() => {});
-                throw openErr;
+                try {
+                  await fetch(getFetchUrl() + '/delete_wallet_cache', {
+                    method: 'POST',
+                    headers: getRpcHeaders(),
+                    credentials: 'same-origin',
+                    body: JSON.stringify({ filename: filename }),
+                  });
+                } catch (_) {}
+                await rpcNoRetry('restore_deterministic_wallet', {
+                  seed: seed,
+                  password: password,
+                  filename: filename,
+                  restore_height: userRestoreHeight,
+                  language: 'English',
+                  autosave_current: false,
+                }, { timeoutMs: 30000 });
+                restoredFresh = true;
+              } catch (retryErr) {
+                const retryMsg = String((retryErr && retryErr.message) || '');
+                if (/exists|already exists/i.test(retryMsg)) {
+                  await rpcImmediate('open_wallet', { filename: filename, password: password || '' }, { timeoutMs: 30000 });
+                  restoredFresh = true;
+                } else {
+                  throw retryErr;
+                }
               }
             } else {
               if (/timed out|abort|timeout/i.test(em)) {

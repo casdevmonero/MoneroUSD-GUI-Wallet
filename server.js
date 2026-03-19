@@ -1049,6 +1049,39 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // --- Delete wallet cache (for re-restore with correct height) ---
+  if (req.method === 'POST' && req.url === '/delete_wallet_cache') {
+    let body = '';
+    req.on('data', (c) => { body += c; });
+    req.on('end', () => {
+      const session = getSession(req);
+      if (!session) return sendJson(res, 401, { error: 'No session' });
+      try {
+        const { filename } = JSON.parse(body || '{}');
+        if (!filename || /[\/\\]/.test(filename)) return sendJson(res, 400, { error: 'Invalid filename' });
+        // Delete both .wallet (cache) and .keys files so restore_deterministic_wallet
+        // can recreate them from the seed. The seed is always provided by the client
+        // on re-restore, so no key material is lost.
+        const walletFile = path.join(session.walletDir, filename);
+        const candidates = [walletFile, walletFile + '.wallet', walletFile + '.keys', walletFile + '.wallet.keys'];
+        let deleted = false;
+        for (const f of candidates) {
+          try {
+            if (fs.existsSync(f)) {
+              fs.unlinkSync(f);
+              deleted = true;
+              console.log('  Deleted wallet file: ' + path.basename(f));
+            }
+          } catch (_) {}
+        }
+        sendJson(res, 200, { deleted });
+      } catch (e) {
+        sendJson(res, 400, { error: 'Invalid request' });
+      }
+    });
+    return;
+  }
+
   // --- Wallet JSON-RPC proxy (per-session) ---
 
   if (req.method === 'POST' && req.url === '/json_rpc') {

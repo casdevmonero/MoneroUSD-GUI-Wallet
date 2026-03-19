@@ -5429,11 +5429,9 @@ window.addEventListener('unhandledrejection', function(e) {
           const importedName = filename;
           await configureWalletRpcMoneroStyle().catch(() => {});
           await refreshAddress().catch(() => {});
-          // Phase 2: Rescan blockchain from the user's desired height, then incrementalRefresh
-          if (restoredFresh) {
-            showSyncStatus('Preparing blockchain scan…', true);
-            await rpcImmediate('rescan_blockchain', { hard: false }, { timeoutMs: 300000 }).catch(() => {});
-          }
+          // Skip rescan_blockchain — it blocks the entire wallet-rpc process for minutes.
+          // The wallet was restored with restore_height:0 so it already scans from genesis.
+          // Use incrementalRefresh with short batch timeouts so the UI stays responsive.
           showSyncStatus('Scanning blockchain… 0%', true);
           const syncResult = await incrementalRefresh(userHeight, (msg) => {
             if (getActiveWalletName() === importedName) showSyncStatus(msg, true);
@@ -5451,7 +5449,6 @@ window.addEventListener('unhandledrejection', function(e) {
             } catch (_) {}
             await refreshBalances({ force: true }).catch(() => {});
             if (lastUsdmBalanceAtomic > 0n) break;
-            // Brief pause before retry
             await new Promise(ok => setTimeout(ok, 2000));
           }
           await refreshTransfers().catch(() => {});
@@ -5967,11 +5964,9 @@ window.addEventListener('unhandledrejection', function(e) {
 
           startBalanceRefreshInterval();
 
-          // Phase 2: Rescan blockchain from 0, then incrementalRefresh with live progress
-          if (restoredFresh) {
-            showSyncStatus('Preparing blockchain scan…', true);
-            await rpcImmediate('rescan_blockchain', { hard: false }, { timeoutMs: 300000 }).catch(() => {});
-          }
+          // Skip rescan_blockchain — it blocks the entire wallet-rpc process for minutes.
+          // The wallet was restored with restore_height:0 so it already scans from genesis.
+          // Use incrementalRefresh with short batch timeouts so the UI stays responsive.
           showSyncStatus('Scanning blockchain… 0%', true);
           await incrementalRefresh(userRestoreHeight, (msg) => showSyncStatus(msg, true), { maxTimeMs: 600000 }).catch(() => {});
 

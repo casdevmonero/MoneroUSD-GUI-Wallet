@@ -2315,6 +2315,8 @@ window.addEventListener('unhandledrejection', function(e) {
       renderSwapHistory();
     }
 
+    let _historyRefreshInFlight = false;
+
     function renderSwapHistory() {
       if (!swapHistoryList) return;
       const swaps = getSwapsForWallet(getSwapWalletKey())
@@ -2325,9 +2327,11 @@ window.addEventListener('unhandledrejection', function(e) {
         return;
       }
       swapHistoryList.innerHTML = '';
+      const pendingToRefresh = [];
       swaps.forEach((s) => {
         const item = document.createElement('div');
         item.className = 'swap-history-item';
+        item.style.cursor = 'pointer';
         const dir = s.direction === 'crypto_to_usdm'
           ? `${s.asset || '?'} \u2192 USDm`
           : `USDm \u2192 ${s.asset || '?'}`;
@@ -2338,15 +2342,14 @@ window.addEventListener('unhandledrejection', function(e) {
         const isMint = s.direction === 'crypto_to_usdm';
         const historyTxid = isMint ? (s.minted_tx || '') : (s.payout_tx || '');
         const historyTxAsset = isMint ? 'USDm' : (s.asset || 'USDm');
-        const historyTxHtml = historyTxid ? ' · ' + txLink(historyTxAsset, historyTxid, { label: escHtml(historyTxid).slice(0, 8) + '…' }) : '';
+        const historyTxHtml = historyTxid ? ' \u00b7 ' + txLink(historyTxAsset, historyTxid, { label: escHtml(historyTxid).slice(0, 8) + '\u2026' }) : '';
         item.innerHTML =
           '<div class="swap-history-left">' +
             '<span class="swap-history-dir">' + escHtml(dir) + '</span>' +
             '<span class="swap-history-detail">' + escHtml(amount) + (date ? ' \u00b7 ' + escHtml(date) : '') + ' \u00b7 ' + escHtml((s.swap_id || '').slice(0, 8)) + historyTxHtml + '</span>' +
-          '</div>' +
-          '<span class="swap-history-status ' + escHtml(swapStatusClass(s.status)) + '">' + escHtml(swapStatusLabel(s.status)) + '</span>';
+          '</div>';
         if (isSwapPending(s.status)) {
-          // Add resume + cancel buttons for pending swaps
+          // Pending: show Resume + Cancel buttons, entire row is clickable
           const btnWrap = document.createElement('span');
           btnWrap.style.cssText = 'display:flex;gap:6px;align-items:center;';
           const resumeBtn = document.createElement('button');
@@ -2363,10 +2366,9 @@ window.addEventListener('unhandledrejection', function(e) {
             if (!confirm('Cancel this swap?')) return;
             try {
               histCancelBtn.disabled = true;
-              histCancelBtn.textContent = '…';
+              histCancelBtn.textContent = '\u2026';
               await swapFetch(`/api/swaps/${s.swap_id}/cancel`, { method: 'POST' });
               persistSwap({ swap_id: s.swap_id, status: 'cancelled', error: 'Cancelled by user' });
-              renderSwapHistory();
             } catch (err) {
               histCancelBtn.textContent = 'Error';
               setTimeout(() => { histCancelBtn.textContent = 'Cancel'; histCancelBtn.disabled = false; }, 2000);
@@ -2374,11 +2376,79 @@ window.addEventListener('unhandledrejection', function(e) {
           });
           btnWrap.appendChild(resumeBtn);
           btnWrap.appendChild(histCancelBtn);
-          item.querySelector('.swap-history-status')?.replaceWith(btnWrap);
-          item.title = 'Pending swap';
+          item.appendChild(btnWrap);
+          item.title = 'Click to open this swap';
+          item.addEventListener('click', (e) => {
+            if (e.target.tagName === 'BUTTON' || e.target.tagName === 'A') return;
+            resumeSwap(s);
+          });
+          pendingToRefresh.push(s);
+        } else {
+          // Completed/failed/cancelled: show status badge, clickable to view details
+          item.insertAdjacentHTML('beforeend',
+            '<span class="swap-history-status ' + escHtml(swapStatusClass(s.status)) + '">' + escHtml(swapStatusLabel(s.status)) + '</span>');
+          item.title = 'Click to view swap details';
+          item.addEventListener('click', (e) => {
+            if (e.target.tagName === 'A') return;
+            viewSwap(s);
+          });
         }
         swapHistoryList.appendChild(item);
       });
+
+      // Immediately refresh statuses from server for any locally-pending swaps
+      if (pendingToRefresh.length > 0 && !_historyRefreshInFlight) {
+        _historyRefreshInFlight = true;
+        (async () => {
+          let changed = false;
+          for (const s of pendingToRefresh) {
+            try {
+              const res = await swapFetch(`/api/swaps/${s.swap_id}`);
+              if (res && res.status && res.status !== s.status) {
+                saveSwapRecord(getSwapWalletKey(), {
+                  swap_id: s.swap_id, status: res.status,
+                  minted_tx: res.minted_tx, payout_tx: res.payout_tx, error: res.error,
+                });
+                changed = true;
+              }
+            } catch (_) {}
+          }
+          _historyRefreshInFlight = false;
+          if (changed) renderSwapHistory();
+        })();
+      }
+    }
+
+    function viewSwap(record) {
+      swapMode = record.direction || 'crypto_to_usdm';
+      swapAsset = record.asset || 'BTC';
+      if (fromSel) fromSel.value = swapMode === 'crypto_to_usdm' ? swapAsset : 'USDm';
+      if (toSel) toSel.value = swapMode === 'crypto_to_usdm' ? 'USDm' : swapAsset;
+      normalizePair();
+      openModal();
+      swapId = record.swap_id;
+      burnAddress = record.burn_address || '';
+      depositAddress = record.deposit_address || '';
+      showSwapId(swapId);
+      updateDepositSection();
+      if (actionBtn) { actionBtn.disabled = true; actionBtn.classList.add('hidden'); }
+      if (newSwapBtn) newSwapBtn.classList.remove('hidden');
+      if (cancelBtn) cancelBtn.classList.add('hidden');
+      const isMint = record.direction === 'crypto_to_usdm';
+      const txid = isMint ? (record.minted_tx || '') : (record.payout_tx || '');
+      const txAsset = isMint ? 'USDm' : (record.asset || '');
+      const txHtml = txid ? ' ' + txLink(txAsset, txid) : '';
+      if (record.status === 'minted') {
+        setStatus('USDm minted and sent.' + txHtml, 'success');
+      } else if (record.status === 'payout_sent') {
+        setStatus('Payout sent.' + txHtml, 'success');
+      } else if (record.status === 'failed') {
+        setStatus(escHtml(record.error || 'Swap failed.'), 'error');
+      } else if (record.status === 'cancelled') {
+        setStatus('Swap cancelled.', 'error');
+      } else {
+        setStatus(escHtml(swapStatusLabel(record.status)));
+      }
     }
 
     function resumeSwap(record) {

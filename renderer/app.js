@@ -712,11 +712,11 @@ window.addEventListener('unhandledrejection', function(e) {
     modal.className = 'modal-overlay';
     modal.innerHTML = '<div class="modal-box biometric-modal">'
       + '<div class="biometric-icon">&#128274;</div>'
-      + '<h3>Secure Your Wallet</h3>'
-      + '<p>Protect transactions with biometric authentication (Face ID, Touch ID, fingerprint, or Windows Hello).</p>'
-      + '<p class="text-muted" style="font-size:.82rem">Once enabled, all sends, stakes, and swaps will require your biometric before processing.</p>'
+      + '<h3>Link Biometric</h3>'
+      + '<p>Tap the button below to scan your face or fingerprint. This links your biometric to this wallet permanently.</p>'
+      + '<p class="text-muted" style="font-size:.82rem">Once linked, all sends, stakes, swaps, and loans will require your biometric.</p>'
       + '<div class="biometric-modal-buttons">'
-      + '<button class="btn btn-primary" id="btnBioEnable">Enable Biometric</button>'
+      + '<button class="btn btn-primary" id="btnBioEnable">Tap to Activate Face ID / Fingerprint</button>'
       + '<button class="btn btn-ghost" id="btnBioSkip">Skip for now</button>'
       + '</div>'
       + '</div>';
@@ -5328,6 +5328,14 @@ window.addEventListener('unhandledrejection', function(e) {
       step?.classList.remove('hidden');
     }
 
+    // Show biometric toggle rows if WebAuthn is available in this browser
+    if (isBrowser && isWebAuthnAvailable()) {
+      const restoreBioRow = document.getElementById('restoreBiometricRow');
+      const createBioRow = document.getElementById('createBiometricRow');
+      if (restoreBioRow) restoreBioRow.style.display = '';
+      if (createBioRow) createBioRow.style.display = '';
+    }
+
     // Generate a unique wallet filename using crypto-random bytes
     function generateWalletFilename() {
       if (!isBrowser) return 'monerousd_main.wallet';
@@ -5459,13 +5467,21 @@ window.addEventListener('unhandledrejection', function(e) {
         createdWalletFilename = '';
         showMainApp();
         initMainApp();
-        // Prompt biometric registration after wallet creation
-        setTimeout(() => {
-          if (currentWalletAddress) {
-            notifyServerWalletAddress(currentWalletAddress);
-            promptBiometricRegistration(currentWalletAddress);
-          }
-        }, 3000);
+        // Register biometric if toggle was checked during wallet creation
+        const createBioToggle = document.getElementById('createBiometricToggle');
+        if (createBioToggle && createBioToggle.checked) {
+          // Wait for address to be populated by autoConnect, then show modal
+          (async function waitForBioAddress() {
+            for (let i = 0; i < 30; i++) {
+              await new Promise(ok => setTimeout(ok, 500));
+              if (currentWalletAddress) {
+                await notifyServerWalletAddress(currentWalletAddress);
+                showBiometricRegistrationModal(currentWalletAddress);
+                return;
+              }
+            }
+          })();
+        }
       } catch (e) {
         if (msg) { msg.textContent = 'Error: ' + (e.message || 'Failed to finalize wallet'); msg.classList.add('error'); }
       }
@@ -5640,10 +5656,14 @@ window.addEventListener('unhandledrejection', function(e) {
           await refreshTransfers().catch(() => {});
           showSyncStatus('', false);
 
-          // Prompt biometric registration after successful restore
+          // Register biometric if toggle was checked during restore
           if (currentWalletAddress) {
             await notifyServerWalletAddress(currentWalletAddress);
-            setTimeout(() => promptBiometricRegistration(currentWalletAddress), 1500);
+            const bioToggle = document.getElementById('restoreBiometricToggle');
+            if (bioToggle && bioToggle.checked) {
+              // Must show modal with a tap-button — WebAuthn requires a user gesture
+              setTimeout(() => showBiometricRegistrationModal(currentWalletAddress), 500);
+            }
           }
         } catch (e) {
           const errMsg = (e.message || 'Unknown');

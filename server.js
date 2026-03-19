@@ -52,7 +52,7 @@ const ALLOWED_RPC_METHODS = new Set([
 ]);
 
 // ===== Security: Per-IP session limits =====
-const MAX_SESSIONS_PER_IP = 3;
+const MAX_SESSIONS_PER_IP = 10;
 const sessionsByIp = new Map(); // ip -> Set<token>
 
 // ===== Security: Rate limiting for all endpoints =====

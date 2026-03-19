@@ -2089,3 +2089,20 @@ body {
   opacity: 1;
   transform: translateX(-50%) translateY(0);
 }
+
+.biometric-toggle-row {
+  margin-top: 12px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08);
+}
+.biometric-toggle-row small {
+  display: block;
+  margin-top: 4px;
+  margin-left: 26px;
+  font-size: .78rem;
+}
+.biometric-checkbox span {
+  font-size: .92rem;
+}

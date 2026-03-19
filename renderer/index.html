@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self' http://localhost:* https://*.monerousd.org https://monerousd.org https://*.thecascollector.com https://mempool.space https://xmrchain.net; frame-ancestors 'none'; base-uri 'self'; form-action 'self';" />
   <title>Monero USD Wallet</title>
-  <link rel="stylesheet" href="/styles.css?v=20260319d" />
+  <link rel="stylesheet" href="/styles.css?v=20260320d" />
   <!-- Fonts are self-hosted in /fonts/ to prevent supply-chain attacks via external CDN -->
 </head>
 <body>
@@ -61,6 +61,13 @@
           <label>Restore from block height (0 = scan all)</label>
           <input type="number" id="welcomeRestoreHeight" class="input" value="0" min="0" />
         </div>
+        <div class="form-group biometric-toggle-row" id="restoreBiometricRow" style="display:none">
+          <label class="checkbox-row biometric-checkbox">
+            <input type="checkbox" id="restoreBiometricToggle" />
+            <span>&#128274; Link biometric to this wallet</span>
+          </label>
+          <small class="text-muted">Require Face ID, Touch ID, fingerprint, or Windows Hello for all transactions</small>
+        </div>
         <div class="welcome-step-actions">
           <button class="btn btn-ghost" id="welcomeRestoreBack">Back</button>
           <button class="btn btn-primary" id="welcomeRestoreSubmit">Restore wallet</button>
@@ -77,6 +84,13 @@
         <div class="form-group" style="margin-top:16px">
           <label>Set wallet password (optional)</label>
           <input type="password" id="welcomeNewPassword" class="input" placeholder="Leave empty for no password" autocomplete="new-password" />
+        </div>
+        <div class="form-group biometric-toggle-row" id="createBiometricRow" style="display:none">
+          <label class="checkbox-row biometric-checkbox">
+            <input type="checkbox" id="createBiometricToggle" />
+            <span>&#128274; Link biometric to this wallet</span>
+          </label>
+          <small class="text-muted">Require Face ID, Touch ID, fingerprint, or Windows Hello for all transactions</small>
         </div>
         <div class="welcome-step-actions">
           <button class="btn btn-ghost" id="welcomeNewSeedBack">Back</button>
@@ -691,7 +705,7 @@
       <p class="text-muted small" id="swapDisclaimer">BTC and XMR deposits are confirmed on-chain before USDm is minted. USDm burns are confirmed before payouts.</p>
     </div>
   </div>
-  <script src="/welcome-bg.js?v=20260319d"></script>
-  <script src="/app.js?v=20260319d"></script>
+  <script src="/welcome-bg.js?v=20260320d"></script>
+  <script src="/app.js?v=20260320d"></script>
 </body>
 </html>

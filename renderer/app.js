@@ -367,6 +367,21 @@ window.addEventListener('unhandledrejection', function(e) {
 
   // Get daemon blockchain height via wallet RPC get_height (proxied through server).
   async function getDaemonHeight() {
+    // First try the daemon RPC directly (browser mode proxy)
+    if (isBrowser) {
+      try {
+        const resp = await fetch(window.location.origin + '/daemon_rpc', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({ jsonrpc: '2.0', id: '0', method: 'get_info', params: {} }),
+        });
+        const data = await resp.json();
+        const h = data && data.result && data.result.height;
+        if (h && h > 0) return Number(h);
+      } catch (_) {}
+    }
+    // Fallback: wallet RPC get_height (may lag behind daemon)
     try {
       const r = await rpcImmediate('get_height', {}, { timeoutMs: 5000 });
       return Number(r && r.height) || 0;
@@ -4510,20 +4525,16 @@ window.addEventListener('unhandledrejection', function(e) {
         const filename = 'monerousd_main.wallet';
         let restoredFresh = false;
         let result;
-        // Fetch daemon height to use as restore_height for fast wallet creation
-        let dTipHeight = 0;
+        // Restore at the actual user height (or 0 for full scan).
+        // With --max-concurrency 4, full chain scan is fast (~4s for 15K blocks).
+        const actualHeight = restoreHeight || 0;
         try {
-          const dH = await getDaemonHeight();
-          if (dH > 10) dTipHeight = dH;
-        } catch (_) {}
-        const fastHeight = dTipHeight > 10 ? dTipHeight : (restoreHeight || 1);
-        try {
-          showMessage('importMessage', 'Creating wallet…', false);
+          showMessage('importMessage', 'Restoring and scanning wallet…', false);
           result = await rpcImmediate('restore_deterministic_wallet', {
             seed: seed,
             password: password,
             filename: filename,
-            restore_height: fastHeight,
+            restore_height: actualHeight,
             language: language,
             autosave_current: true,
           }, { timeoutMs: 120000 });
@@ -4575,15 +4586,11 @@ window.addEventListener('unhandledrejection', function(e) {
           const importedName = filename;
           await configureWalletRpcMoneroStyle().catch(() => {});
           await refreshAddress().catch(() => {});
-          // Scan from user's restore height (0 = full chain) with progress
-          showSyncStatus('Scanning blockchain history… 0%', true);
-          const syncResult = await incrementalRefresh(restoreHeight || 0, (msg) => {
-            if (getActiveWalletName() === importedName) showSyncStatus(msg, true);
-          }, { maxTimeMs: 600000 }).catch(() => ({ ok: false }));
+          // The restore call already scanned the blockchain. Do a quick refresh
+          // to catch any blocks mined during the restore, then update balances.
+          showSyncStatus('Finalizing sync…', true);
+          await rpcImmediate('refresh', {}, { timeoutMs: 30000 }).catch(() => {});
           if (getActiveWalletName() !== importedName) return;
-          if (!syncResult || !syncResult.ok) {
-            showSyncStatus('Sync incomplete. Balance may update as auto-refresh continues.', true);
-          }
           await refreshBalances({ force: true }).catch(() => {});
           await refreshTransfers().catch(() => {});
           await updateDashboardSyncInfo().catch(() => {});
@@ -4931,33 +4938,19 @@ window.addEventListener('unhandledrejection', function(e) {
           showSyncStatus(isBrowser ? 'Connected to relay. Restoring wallet from seed…' : 'Restoring wallet from seed…', true);
           await rpcImmediate('close_wallet', {}, { timeoutMs: 5000 }).catch(() => {});
 
-          // Fetch daemon height so we can restore at tip for instant wallet creation
-          let daemonTipHeight = 0;
-          if (isBrowser) {
-            try {
-              const dResp = await fetch(window.location.origin + '/daemon_rpc', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                credentials: 'same-origin',
-                body: JSON.stringify({ jsonrpc: '2.0', id: '0', method: 'get_info', params: {} }),
-              });
-              const dData = await dResp.json();
-              daemonTipHeight = (dData && dData.result && dData.result.height) || 0;
-            } catch (_) {}
-          }
-
-          // Use daemon tip height for restore so wallet-rpc doesn't block scanning
-          // the entire chain. We'll scan history separately via refresh().
-          const fastRestoreHeight = daemonTipHeight > 10 ? daemonTipHeight : (restoreHeight || 1);
-          const userScanHeight = restoreHeight || 0; // where to start background scan
+          // Restore at the user's actual restore height (or 0 for full scan).
+          // With --max-concurrency 4, scanning ~15K blocks takes only ~4s.
+          // DO NOT restore at daemon tip — refresh(start_height=0) won't rescan
+          // earlier blocks because the wallet's internal restore_height prevents it.
+          const actualRestoreHeight = restoreHeight || 0;
 
           try {
-            showSyncStatus('Creating wallet…', true);
+            showSyncStatus('Restoring and scanning wallet…', true);
             await rpcNoRetry('restore_deterministic_wallet', {
               seed: seed,
               password: password,
               filename: filename,
-              restore_height: fastRestoreHeight,
+              restore_height: actualRestoreHeight,
               language: 'English',
               autosave_current: false,
             }, { timeoutMs: 120000 });
@@ -5001,15 +4994,10 @@ window.addEventListener('unhandledrejection', function(e) {
           await refreshAddress().catch(() => {});
           startBalanceRefreshInterval();
 
-          // Now scan blockchain history in the background with progress
-          if (daemonTipHeight > 0 && userScanHeight < daemonTipHeight) {
-            showSyncStatus('Scanning blockchain history… 0%', true);
-            // Use incremental refresh with progress reporting
-            await incrementalRefresh(userScanHeight, (msg) => showSyncStatus(msg, true), { maxTimeMs: 600000 }).catch(() => {});
-          } else {
-            // Simple refresh
-            await rpcImmediate('refresh', { start_height: userScanHeight }, { timeoutMs: 120000 }).catch(() => {});
-          }
+          // The restore call already scanned the blockchain up to the height
+          // at the time of restore. Do a quick refresh to catch any new blocks
+          // mined during the restore process.
+          await rpcImmediate('refresh', {}, { timeoutMs: 30000 }).catch(() => {});
 
           rpcQueue = Promise.resolve();
           await refreshBalances({ force: true }).catch(() => {});

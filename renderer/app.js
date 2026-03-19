@@ -894,16 +894,20 @@ window.addEventListener('unhandledrejection', function(e) {
     const base = isBrowser
       ? (window.location.origin + '/api/swap-proxy')
       : getSwapBackendUrl().replace(/\/$/, '');
-    const url = base + path;
+    // Add cache-busting parameter for GET requests to prevent stale cached responses
+    const method = options.method || 'GET';
+    const cacheBust = method === 'GET' ? (path.includes('?') ? '&_t=' : '?_t=') + Date.now() : '';
+    const url = base + path + cacheBust;
     const timeoutMs = options.timeoutMs != null ? options.timeoutMs : 15000;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const res = await fetch(url, {
-        method: options.method || 'GET',
+        method: method,
         headers: { 'Content-Type': 'application/json' },
         body: options.body ? JSON.stringify(options.body) : undefined,
         signal: controller.signal,
+        cache: 'no-store',
       });
       const text = await res.text();
       let data;
@@ -2707,8 +2711,9 @@ window.addEventListener('unhandledrejection', function(e) {
       if (!swapId) return;
       try {
         const res = await swapFetch(`/api/swaps/${swapId}`);
-        if (!res) return;
+        if (!res || typeof res !== 'object') { console.warn('[swap-poll] Empty or invalid response for swap', swapId); return; }
         const status = res.status || '';
+        if (!status) { console.warn('[swap-poll] No status field in response:', JSON.stringify(res).slice(0, 200)); return; }
         // Persist every status update so history stays current
         persistSwap({ swap_id: swapId, status, minted_tx: res.minted_tx, payout_tx: res.payout_tx, error: res.error });
         if (status === 'awaiting_deposit') {
@@ -2753,7 +2758,8 @@ window.addEventListener('unhandledrejection', function(e) {
 
     function startPolling() {
       stopPolling();
-      pollTimer = setInterval(pollSwapStatus, 6000);
+      pollSwapStatus(); // Poll immediately, don't wait for first interval
+      pollTimer = setInterval(pollSwapStatus, 5000);
     }
 
     function stopPolling() {
@@ -2829,7 +2835,7 @@ window.addEventListener('unhandledrejection', function(e) {
     let bgPollTimer = null;
     function autoResumePendingSwaps() {
       if (bgPollTimer) clearInterval(bgPollTimer);
-      bgPollTimer = setInterval(pollAllPendingSwaps, 10000);
+      bgPollTimer = setInterval(pollAllPendingSwaps, 6000);
       pollAllPendingSwaps(); // Run immediately
     }
 
@@ -2886,18 +2892,16 @@ window.addEventListener('unhandledrejection', function(e) {
               error: serverSwap.error,
               created_at: serverSwap.created_at,
             };
-            // Only add if not already in local history
+            // Always merge server data into local — server is authoritative for status
             const local = getSwapsForWallet(walletKey);
-            if (!local.some((s) => s.swap_id === record.swap_id)) {
+            const existing = local.find((s) => s.swap_id === record.swap_id);
+            if (!existing) {
               saveSwapRecord(walletKey, record);
               changed = true;
-            } else {
-              // Update status if server has newer info
-              const existing = local.find((s) => s.swap_id === record.swap_id);
-              if (existing && existing.status !== record.status) {
-                saveSwapRecord(walletKey, record);
-                changed = true;
-              }
+            } else if (existing.status !== record.status || existing.minted_tx !== record.minted_tx || existing.payout_tx !== record.payout_tx) {
+              // Server has newer info — update local record
+              saveSwapRecord(walletKey, record);
+              changed = true;
             }
           }
           if (changed) renderSwapHistory();
@@ -2914,16 +2918,21 @@ window.addEventListener('unhandledrejection', function(e) {
     };
     // Run after a short delay to not block UI initialization
     setTimeout(syncSwapHistoryFromServer, 3000);
+    // Periodically re-sync from server to ensure history stays up-to-date
+    setInterval(() => {
+      _swapSyncSucceeded = false;
+      syncSwapHistoryFromServer();
+    }, 30000);
 
     async function pollAllPendingSwaps() {
       const swaps = getSwapsForWallet(getSwapWalletKey());
       const pending = swaps.filter((s) => isSwapPending(s.status));
-      if (pending.length === 0) { if (bgPollTimer) { clearInterval(bgPollTimer); bgPollTimer = null; } return; }
+      if (pending.length === 0) return; // Keep timer running — new swaps may appear
       for (const s of pending) {
         try {
           const res = await swapFetch(`/api/swaps/${s.swap_id}`);
           if (!res) continue;
-          if (res.status !== s.status) {
+          if (res.status && res.status !== s.status) {
             persistSwap({
               swap_id: s.swap_id, status: res.status,
               minted_tx: res.minted_tx, payout_tx: res.payout_tx, error: res.error,

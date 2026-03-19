@@ -430,25 +430,33 @@ async function autoRestartSession(session) {
     session.state = 'ready';
     // Reset restart counter after stability window
     setTimeout(() => { session._restartCount = 0; }, AUTO_RESTART_WINDOW_MS);
-    // Auto-reopen wallet if one was previously loaded
+    // Auto-reopen wallet if one was previously loaded (fire-and-forget — open_wallet blocks during scan)
     if (session.walletFilename) {
-      // Give wallet-rpc a moment to fully initialize before opening wallet
-      await new Promise(ok => setTimeout(ok, 1000));
-      try {
-        const openResult = await walletRpc(session.port, 'open_wallet', {
-          filename: session.walletFilename,
-          password: session.walletPassword || '',
-        }, 30000);
-        if (openResult && openResult.result) {
-          console.log('  Session auto-reopened wallet "' + session.walletFilename + '" on port ' + session.port);
-        } else {
-          console.log('  Session failed to auto-reopen wallet on port ' + session.port + ': ' + JSON.stringify(openResult && openResult.error));
+      session.state = 'reopening';
+      console.log('  Session auto-restarted on port ' + session.port + ', reopening wallet "' + session.walletFilename + '"...');
+      // Run asynchronously so we don't block the event loop
+      (async () => {
+        await new Promise(ok => setTimeout(ok, 1000));
+        try {
+          const openResult = await walletRpc(session.port, 'open_wallet', {
+            filename: session.walletFilename,
+            password: session.walletPassword || '',
+          }, 600000); // 10 min — open_wallet blocks during full chain scan
+          if (openResult && openResult.result) {
+            session.state = 'ready';
+            console.log('  Session auto-reopened wallet "' + session.walletFilename + '" on port ' + session.port);
+          } else {
+            session.state = 'ready'; // still usable, client can retry open
+            console.log('  Session wallet reopen returned error on port ' + session.port + ': ' + JSON.stringify(openResult && openResult.error));
+          }
+        } catch (e) {
+          session.state = 'ready'; // wallet-rpc is alive, just wallet not opened
+          console.log('  Session wallet auto-reopen timed out on port ' + session.port + ': ' + (e.message || e));
         }
-      } catch (e) {
-        console.log('  Session wallet auto-reopen error on port ' + session.port + ': ' + (e.message || e));
-      }
+      })();
+    } else {
+      console.log('  Session auto-restarted successfully on port ' + session.port);
     }
-    console.log('  Session auto-restarted successfully on port ' + session.port);
   } else {
     // Port may be occupied by stale process — try a new port
     console.log('  Session auto-restart failed on port ' + session.port + ', trying new port');
@@ -488,19 +496,24 @@ async function autoRestartSession(session) {
     if (retryReady) {
       session.state = 'ready';
       setTimeout(() => { session._restartCount = 0; }, AUTO_RESTART_WINDOW_MS);
-      // Auto-reopen wallet on new port too
+      // Auto-reopen wallet on new port (fire-and-forget)
       if (session.walletFilename) {
-        try {
-          const openResult = await walletRpc(newPort, 'open_wallet', {
-            filename: session.walletFilename,
-            password: session.walletPassword || '',
-          }, 10000);
-          if (openResult && openResult.result) {
-            console.log('  Session auto-reopened wallet on new port ' + newPort);
-          }
-        } catch (_) {}
+        session.state = 'reopening';
+        console.log('  Session restarted on new port ' + newPort + ', reopening wallet...');
+        (async () => {
+          await new Promise(ok => setTimeout(ok, 1000));
+          try {
+            const r = await walletRpc(newPort, 'open_wallet', {
+              filename: session.walletFilename,
+              password: session.walletPassword || '',
+            }, 600000);
+            session.state = 'ready';
+            if (r && r.result) console.log('  Session auto-reopened wallet on new port ' + newPort);
+          } catch (_) { session.state = 'ready'; }
+        })();
+      } else {
+        console.log('  Session auto-restarted on new port ' + newPort);
       }
-      console.log('  Session auto-restarted on new port ' + newPort);
     } else {
       console.log('  Session auto-restart failed on new port ' + newPort);
       session.state = 'dead';
@@ -1161,14 +1174,15 @@ const server = http.createServer(async (req, res) => {
         setSessionCookie(res, session.token);
       }
 
-      if (session.state === 'starting' || session.state === 'restarting') {
+      if (session.state === 'starting' || session.state === 'restarting' || session.state === 'reopening') {
         // Wait briefly for the session to become ready instead of failing immediately
         const waitStart = Date.now();
-        while (session.state === 'starting' || session.state === 'restarting') {
-          if (Date.now() - waitStart > 5000) break;
+        const maxWait = session.state === 'reopening' ? 15000 : 5000; // reopening can take longer
+        while (session.state === 'starting' || session.state === 'restarting' || session.state === 'reopening') {
+          if (Date.now() - waitStart > maxWait) break;
           await new Promise(ok => setTimeout(ok, 300));
         }
-        if (session.state !== 'ready') {
+        if (session.state !== 'ready' && session.state !== 'reopening') {
           return sendJson(res, 503, { error: { message: 'Wallet engine is starting. Please wait a moment and try again.' } });
         }
       }
@@ -1181,7 +1195,7 @@ const server = http.createServer(async (req, res) => {
         }
       }
 
-      if (session.state !== 'ready') {
+      if (session.state !== 'ready' && session.state !== 'reopening') {
         return sendJson(res, 502, { error: { message: 'Wallet session is not available. Please refresh the page.' } });
       }
 

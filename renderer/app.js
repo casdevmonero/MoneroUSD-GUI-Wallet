@@ -2819,6 +2819,7 @@ window.addEventListener('unhandledrejection', function(e) {
 
     let lastPrice = null;
     let swapId = null;
+    let swapOwnerSecret = '';
     let pollTimer = null;
     let priceTimer = null;
     let priceRetryTimer = null;
@@ -2923,7 +2924,7 @@ window.addEventListener('unhandledrejection', function(e) {
             try {
               histCancelBtn.disabled = true;
               histCancelBtn.textContent = '\u2026';
-              await swapFetch(`/api/swaps/${s.swap_id}/cancel`, { method: 'POST' });
+              await swapFetch(`/api/swaps/${s.swap_id}/cancel`, { method: 'POST', body: { owner_secret: s.owner_secret || '' } });
               persistSwap({ swap_id: s.swap_id, status: 'cancelled', error: 'Cancelled by user' });
             } catch (err) {
               histCancelBtn.textContent = 'Error';
@@ -3017,6 +3018,7 @@ window.addEventListener('unhandledrejection', function(e) {
       openModal();
       // Set swap state AFTER openModal (which calls resetSwapUi and clears these)
       swapId = record.swap_id;
+      swapOwnerSecret = record.owner_secret || '';
       burnAddress = record.burn_address || '';
       depositAddress = record.deposit_address || '';
       showSwapId(swapId);
@@ -3258,12 +3260,14 @@ window.addEventListener('unhandledrejection', function(e) {
           },
         });
         swapId = res.swap_id;
+        swapOwnerSecret = res.owner_secret || '';
         showSwapId(swapId);
         depositAddress = res.deposit_address;
         persistSwap({
           swap_id: swapId, direction: 'crypto_to_usdm', asset: swapAsset,
           amount: amountRaw, deposit_address: depositAddress,
           expected_usdm: res.expected_usdm, price_usd: res.price_usd,
+          owner_secret: swapOwnerSecret,
           status: 'awaiting_deposit', created_at: new Date().toISOString(),
         });
         depositSection?.classList.remove('hidden');
@@ -3286,6 +3290,7 @@ window.addEventListener('unhandledrejection', function(e) {
           },
         });
         swapId = res.swap_id;
+        swapOwnerSecret = res.owner_secret || '';
         showSwapId(swapId);
         burnAddress = res.burn_address;
         persistSwap({
@@ -3293,6 +3298,7 @@ window.addEventListener('unhandledrejection', function(e) {
           amount_usdm: amountRaw, burn_address: burnAddress,
           payout_address: payoutAddr, expected_crypto: res.expected_crypto,
           price_usd: res.price_usd,
+          owner_secret: swapOwnerSecret,
           status: 'awaiting_burn', created_at: new Date().toISOString(),
         });
         setStatus('Preparing USDm burn…');
@@ -3333,7 +3339,7 @@ window.addEventListener('unhandledrejection', function(e) {
         get_tx_hex: false,
         get_tx_metadata: false,
       }, { bioToken: burnBioToken });
-      await swapFetch(`/api/swaps/${swapId}/burn`, { method: 'POST', body: { tx_hash: res.tx_hash } });
+      await swapFetch(`/api/swaps/${swapId}/burn`, { method: 'POST', body: { tx_hash: res.tx_hash, owner_secret: swapOwnerSecret } });
       persistSwap({ swap_id: swapId, status: 'burn_submitted', burn_tx: res.tx_hash });
       setStatus('Burn submitted. Waiting for confirmation…');
       actionBtn.textContent = 'Waiting for burn confirmation';
@@ -3436,7 +3442,7 @@ window.addEventListener('unhandledrejection', function(e) {
       try {
         cancelBtn.disabled = true;
         cancelBtn.textContent = 'Cancelling…';
-        await swapFetch(`/api/swaps/${swapId}/cancel`, { method: 'POST' });
+        await swapFetch(`/api/swaps/${swapId}/cancel`, { method: 'POST', body: { owner_secret: swapOwnerSecret } });
         persistSwap({ swap_id: swapId, status: 'cancelled', error: 'Cancelled by user' });
         setStatus('Swap cancelled.', 'error');
         stopPolling();

@@ -121,14 +121,86 @@ function walletRpc(port, method, params, timeoutMs) {
 }
 
 async function waitForWalletRpc(port, maxRetries) {
-  for (let i = 0; i < (maxRetries || 20); i++) {
+  // Fast first check after 200ms, then 300ms intervals — total ~3s for 10 retries
+  for (let i = 0; i < (maxRetries || 10); i++) {
     try {
-      const r = await walletRpc(port, 'get_version', {}, 2000);
+      const r = await walletRpc(port, 'get_version', {}, 1500);
       if (r && r.result) return true;
     } catch (_) {}
-    await new Promise(ok => setTimeout(ok, 500));
+    await new Promise(ok => setTimeout(ok, i === 0 ? 200 : 300));
   }
   return false;
+}
+
+const MAX_AUTO_RESTARTS = 3;
+const AUTO_RESTART_WINDOW_MS = 60000; // reset counter after 1 min of stability
+
+async function autoRestartSession(session) {
+  if (session.state === 'closing') return;
+  session._restartCount = (session._restartCount || 0) + 1;
+  if (session._restartCount > MAX_AUTO_RESTARTS) {
+    console.log('  Session port ' + session.port + ' exceeded max auto-restarts, marking dead');
+    session.state = 'dead';
+    return;
+  }
+  console.log('  Auto-restarting wallet-rpc on port ' + session.port + ' (attempt ' + session._restartCount + ')');
+  session.state = 'restarting';
+
+  // Kill old process if still around
+  try { session.process.kill('SIGKILL'); } catch (_) {}
+
+  await new Promise(ok => setTimeout(ok, 500));
+
+  const env = Object.assign({}, process.env, {
+    MONEROUSD_ENABLE_FCMP: '1',
+    MONEROUSD_ALLOW_LOW_MIXIN: '1',
+    MONEROUSD_DISABLE_TX_LIMITS: '1',
+  });
+
+  const args = [
+    '--rpc-bind-ip', '127.0.0.1',
+    '--rpc-bind-port', String(session.port),
+    '--disable-rpc-login',
+    '--wallet-dir', session.walletDir,
+    '--daemon-address', DAEMON_ADDRESS,
+    '--trusted-daemon',
+    '--log-file', path.join(session.walletDir, 'wallet-rpc.log'),
+    '--log-level', '1',
+  ];
+
+  const proc = spawn(WALLET_RPC_BIN, args, {
+    env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    detached: false,
+  });
+
+  session.process = proc;
+  proc.stderr.on('data', () => {});
+  proc.stdout.on('data', () => {});
+
+  proc.on('exit', (code) => {
+    if (session.state !== 'closing') {
+      console.log('  Session wallet-rpc exited unexpectedly (port ' + session.port + ', code ' + code + ') — will auto-restart');
+      session.state = 'dead';
+      autoRestartSession(session);
+    }
+  });
+  proc.on('error', (err) => {
+    console.log('  Session wallet-rpc spawn error: ' + err.message + ' — will auto-restart');
+    session.state = 'dead';
+    autoRestartSession(session);
+  });
+
+  const ready = await waitForWalletRpc(session.port, 10);
+  if (ready) {
+    session.state = 'ready';
+    // Reset restart counter after stability window
+    setTimeout(() => { session._restartCount = 0; }, AUTO_RESTART_WINDOW_MS);
+    console.log('  Session auto-restarted successfully on port ' + session.port);
+  } else {
+    console.log('  Session auto-restart failed on port ' + session.port);
+    session.state = 'dead';
+  }
 }
 
 async function createSession() {
@@ -175,17 +247,19 @@ async function createSession() {
     proxyQueue: Promise.resolve(),
   };
 
-  // Handle unexpected exit
+  // Handle unexpected exit — auto-restart
   proc.on('exit', (code) => {
     if (session.state !== 'closing') {
-      console.log('  Session wallet-rpc exited unexpectedly (port ' + port + ', code ' + code + ')');
+      console.log('  Session wallet-rpc exited unexpectedly (port ' + port + ', code ' + code + ') — will auto-restart');
       session.state = 'dead';
+      autoRestartSession(session);
     }
   });
 
   proc.on('error', (err) => {
-    console.log('  Session wallet-rpc spawn error: ' + err.message);
+    console.log('  Session wallet-rpc spawn error: ' + err.message + ' — will auto-restart');
     session.state = 'dead';
+    autoRestartSession(session);
   });
 
   // Capture stderr for debugging
@@ -194,8 +268,8 @@ async function createSession() {
 
   sessions.set(token, session);
 
-  // Wait for it to be ready (non-blocking from caller's perspective)
-  const ready = await waitForWalletRpc(port, 20);
+  // Wait for it to be ready — 10 retries with fast intervals (~3s total)
+  const ready = await waitForWalletRpc(port, 10);
   if (ready) {
     session.state = 'ready';
     console.log('  Session started: port ' + port + ' (active: ' + sessions.size + ')');
@@ -301,11 +375,15 @@ const server = http.createServer(async (req, res) => {
     if (existing && existing.state === 'ready') {
       return sendJson(res, 200, { status: 'ready', port: existing.port });
     }
-    if (existing && existing.state === 'starting') {
-      return sendJson(res, 200, { status: 'starting' });
+    if (existing && (existing.state === 'starting' || existing.state === 'restarting')) {
+      return sendJson(res, 200, { status: existing.state });
     }
-    // Dead or no session — create new
+    // Dead — try auto-restart before destroying
     if (existing && existing.state === 'dead') {
+      await autoRestartSession(existing);
+      if (existing.state === 'ready') {
+        return sendJson(res, 200, { status: 'ready', port: existing.port });
+      }
       await destroySession(existing.token);
     }
     const session = await createSession();
@@ -399,8 +477,24 @@ const server = http.createServer(async (req, res) => {
         setSessionCookie(res, session.token);
       }
 
-      if (session.state === 'starting') {
-        return sendJson(res, 503, { error: { message: 'Wallet engine is starting. Please wait a moment and try again.' } });
+      if (session.state === 'starting' || session.state === 'restarting') {
+        // Wait briefly for the session to become ready instead of failing immediately
+        const waitStart = Date.now();
+        while (session.state === 'starting' || session.state === 'restarting') {
+          if (Date.now() - waitStart > 5000) break;
+          await new Promise(ok => setTimeout(ok, 300));
+        }
+        if (session.state !== 'ready') {
+          return sendJson(res, 503, { error: { message: 'Wallet engine is starting. Please wait a moment and try again.' } });
+        }
+      }
+
+      if (session.state === 'dead') {
+        // Attempt auto-recovery before failing
+        await autoRestartSession(session);
+        if (session.state !== 'ready') {
+          return sendJson(res, 502, { error: { message: 'Wallet session could not be recovered. Please refresh the page.' } });
+        }
       }
 
       if (session.state !== 'ready') {

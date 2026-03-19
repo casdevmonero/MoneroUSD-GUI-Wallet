@@ -5262,30 +5262,35 @@ window.addEventListener('unhandledrejection', function(e) {
 
   // Initialize a per-user wallet-rpc session on the server
   async function initBrowserSession() {
-    try {
-      const resp = await fetch('/api/session', { method: 'POST', credentials: 'same-origin' });
-      const data = await resp.json();
-      if (data.session_id) browserSessionId = data.session_id;
-      if (data.status === 'ready') return true;
-      if (data.status === 'starting') {
-        // Poll until ready (max 20s)
-        for (let i = 0; i < 40; i++) {
-          await new Promise(ok => setTimeout(ok, 500));
-          const r = await fetch('/api/session/status', {
-            credentials: 'same-origin',
-            headers: browserSessionId ? { 'X-Session-Id': browserSessionId } : {},
-          });
-          const d = await r.json();
-          if (d.status === 'ready') return true;
-          if (d.status === 'dead' || d.status === 'none') return false;
+    // Retry session creation up to 3 times on failure
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const resp = await fetch('/api/session', { method: 'POST', credentials: 'same-origin' });
+        const data = await resp.json();
+        if (data.session_id) browserSessionId = data.session_id;
+        if (data.status === 'ready') return true;
+        if (data.status === 'starting' || data.status === 'restarting') {
+          // Poll until ready (max 8s with faster intervals)
+          for (let i = 0; i < 20; i++) {
+            await new Promise(ok => setTimeout(ok, 400));
+            const r = await fetch('/api/session/status', {
+              credentials: 'same-origin',
+              headers: browserSessionId ? { 'X-Session-Id': browserSessionId } : {},
+            });
+            const d = await r.json();
+            if (d.status === 'ready') return true;
+            if (d.status === 'dead' || d.status === 'none') break;
+          }
         }
+        if (data.error) console.error('Session error:', data.error);
+        // If we got here without success, wait and retry
+        if (attempt < 2) await new Promise(ok => setTimeout(ok, 1000));
+      } catch (e) {
+        console.error('Failed to create session (attempt ' + (attempt + 1) + '):', e);
+        if (attempt < 2) await new Promise(ok => setTimeout(ok, 1000));
       }
-      if (data.error) console.error('Session error:', data.error);
-      return false;
-    } catch (e) {
-      console.error('Failed to create session:', e);
-      return false;
     }
+    return false;
   }
 
   function bootstrap() {

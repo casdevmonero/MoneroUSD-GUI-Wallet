@@ -807,7 +807,7 @@ const server = http.createServer(async (req, res) => {
         credentialId: Buffer.from(credential.id).toString('base64url'),
         credentialPublicKey: Buffer.from(credential.publicKey).toString('base64url'),
         counter: credential.counter,
-        transports: credential.transports || ['internal'],
+        transports: ['internal'],
         walletHash: wHash,
         createdAt: new Date().toISOString(),
       });
@@ -835,13 +835,12 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, 404, { error: 'No biometric registered for this wallet', needsRegistration: true });
       }
       const rpID = getRpId(req);
-      const credIdBytes = Buffer.from(cred.credentialId, 'base64url');
       const options = await generateAuthenticationOptions({
         rpID,
         allowCredentials: [{
-          id: credIdBytes,
+          id: cred.credentialId,
           type: 'public-key',
-          transports: cred.transports || ['internal'],
+          transports: ['internal'],
         }],
         userVerification: 'required',
       });
@@ -874,8 +873,7 @@ const server = http.createServer(async (req, res) => {
       const rpID = getRpId(req);
       const expectedOrigin = getOrigin(req);
       const origins = [expectedOrigin, ...ALLOWED_ORIGINS];
-      const credIdBytes = Buffer.from(cred.credentialId, 'base64url');
-      const pubKeyBytes = Buffer.from(cred.credentialPublicKey, 'base64url');
+      const pubKeyBytes = new Uint8Array(Buffer.from(cred.credentialPublicKey, 'base64url'));
       const verification = await verifyAuthenticationResponse({
         response: body,
         expectedChallenge: session._webauthnAuthChallenge.challenge,
@@ -883,7 +881,7 @@ const server = http.createServer(async (req, res) => {
         expectedRPID: rpID,
         requireUserVerification: true,
         credential: {
-          id: credIdBytes,
+          id: cred.credentialId,
           publicKey: pubKeyBytes,
           counter: cred.counter,
           transports: cred.transports || ['internal'],

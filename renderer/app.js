@@ -398,7 +398,7 @@ window.addEventListener('unhandledrejection', function(e) {
   // This avoids timeout on large chains and keeps the UI responsive.
   async function incrementalRefresh(startHeight, onProgress, options = {}) {
     syncCancelled = false;
-    const BATCH_TIMEOUT = 30000;
+    const BATCH_TIMEOUT = 60000;
     const maxTime = options.maxTimeMs || 600000;
     const began = Date.now();
     let totalFetched = 0;
@@ -4586,11 +4586,16 @@ window.addEventListener('unhandledrejection', function(e) {
           const importedName = filename;
           await configureWalletRpcMoneroStyle().catch(() => {});
           await refreshAddress().catch(() => {});
-          // The restore call already scanned the blockchain. Do a quick refresh
-          // to catch any blocks mined during the restore, then update balances.
-          showSyncStatus('Finalizing sync…', true);
-          await rpcImmediate('refresh', {}, { timeoutMs: 30000 }).catch(() => {});
+          // The restore creates the wallet but doesn't scan. Use incrementalRefresh
+          // for scanning with progress. getDaemonHeight() now queries the daemon directly.
+          showSyncStatus('Scanning blockchain… 0%', true);
+          const syncResult = await incrementalRefresh(restoreHeight || 0, (msg) => {
+            if (getActiveWalletName() === importedName) showSyncStatus(msg, true);
+          }, { maxTimeMs: 600000 }).catch(() => ({ ok: false }));
           if (getActiveWalletName() !== importedName) return;
+          if (!syncResult || !syncResult.ok) {
+            showSyncStatus('Sync incomplete. Balance may update as auto-refresh continues.', true);
+          }
           await refreshBalances({ force: true }).catch(() => {});
           await refreshTransfers().catch(() => {});
           await updateDashboardSyncInfo().catch(() => {});
@@ -4994,10 +4999,11 @@ window.addEventListener('unhandledrejection', function(e) {
           await refreshAddress().catch(() => {});
           startBalanceRefreshInterval();
 
-          // The restore call already scanned the blockchain up to the height
-          // at the time of restore. Do a quick refresh to catch any new blocks
-          // mined during the restore process.
-          await rpcImmediate('refresh', {}, { timeoutMs: 30000 }).catch(() => {});
+          // The restore creates the wallet but does NOT scan the blockchain.
+          // Use incrementalRefresh to scan with progress reporting.
+          // getDaemonHeight() now queries the actual daemon, so progress is accurate.
+          showSyncStatus('Scanning blockchain… 0%', true);
+          await incrementalRefresh(actualRestoreHeight, (msg) => showSyncStatus(msg, true), { maxTimeMs: 600000 }).catch(() => {});
 
           rpcQueue = Promise.resolve();
           await refreshBalances({ force: true }).catch(() => {});

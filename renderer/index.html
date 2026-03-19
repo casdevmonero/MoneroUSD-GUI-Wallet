@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self' http://localhost:* https://*.monerousd.org https://monerousd.org https://*.thecascollector.com https://mempool.space https://xmrchain.net; frame-ancestors 'none'; base-uri 'self'; form-action 'self';" />
   <title>Monero USD Wallet</title>
-  <link rel="stylesheet" href="/styles.css?v=20260320c" />
+  <link rel="stylesheet" href="/styles.css?v=20260319d" />
   <!-- Fonts are self-hosted in /fonts/ to prevent supply-chain attacks via external CDN -->
 </head>
 <body>
@@ -486,6 +486,19 @@
           <button class="btn btn-primary" id="btnSaveRpc">Save & connect</button>
           <div class="form-message" id="settingsMessage"></div>
         </div>
+        <div class="card" id="biometricCard">
+          <h3>&#128274; Biometric Security</h3>
+          <p class="text-muted">Protect transactions with Face ID, Touch ID, fingerprint, or Windows Hello. When enabled, all sends, stakes, swaps, and loans require biometric verification.</p>
+          <div id="biometricStatus" style="display:flex;align-items:center;gap:8px;margin:12px 0">
+            <span id="biometricIndicator" style="font-size:1.1rem">&#9679;</span>
+            <span id="biometricStatusLabel" style="font-size:.9rem">Checking...</span>
+          </div>
+          <div id="biometricActions">
+            <button class="btn btn-primary btn-sm" id="btnBiometricEnable" style="display:none">Enable Biometric</button>
+            <button class="btn btn-ghost btn-sm" id="btnBiometricRemove" style="display:none">Remove Biometric</button>
+          </div>
+          <div class="form-message" id="biometricMessage"></div>
+        </div>
         <div class="card">
           <h3>Wallet keys</h3>
           <p class="text-muted">View keys are fetched from the wallet RPC and never stored in the browser.</p>
@@ -678,7 +691,7 @@
       <p class="text-muted small" id="swapDisclaimer">BTC and XMR deposits are confirmed on-chain before USDm is minted. USDm burns are confirmed before payouts.</p>
     </div>
   </div>
-  <script src="/welcome-bg.js?v=20260320c"></script>
-  <script src="/app.js?v=20260320c"></script>
+  <script src="/welcome-bg.js?v=20260319d"></script>
+  <script src="/app.js?v=20260319d"></script>
 </body>
 </html>

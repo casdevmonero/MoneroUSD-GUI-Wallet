@@ -513,6 +513,269 @@ window.addEventListener('unhandledrejection', function(e) {
   // Default ring_size=0 for all transactions on this blockchain.
   const FCMP_RING_SIZE = 0;
 
+  // ===== WebAuthn / Biometric Authentication =====
+
+  // Base64url encode/decode helpers (no external library needed)
+  function base64urlToBuffer(base64url) {
+    const base64 = base64url.replace(/-/g, '+').replace(/_/g, '/');
+    const pad = base64.length % 4 === 0 ? '' : '='.repeat(4 - (base64.length % 4));
+    const binary = atob(base64 + pad);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return bytes.buffer;
+  }
+
+  function bufferToBase64url(buffer) {
+    const bytes = new Uint8Array(buffer);
+    let binary = '';
+    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+    return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  }
+
+  function isWebAuthnAvailable() {
+    return !!(window.PublicKeyCredential && navigator.credentials);
+  }
+
+  // Check if biometric is registered for a wallet address
+  async function checkBiometricStatus(walletAddress) {
+    if (!walletAddress || !isBrowser) return { registered: false };
+    try {
+      const res = await fetch('/api/webauthn/status?address=' + encodeURIComponent(walletAddress), {
+        headers: getRpcHeaders(),
+        credentials: 'same-origin',
+      });
+      return await res.json();
+    } catch (_) { return { registered: false }; }
+  }
+
+  // Store the last bioToken for use in RPC calls
+  let _pendingBioToken = '';
+
+  // Register a biometric credential for a wallet
+  async function webauthnRegister(walletAddress) {
+    // Step 1: Get registration options from server
+    const optionsRes = await fetch('/api/webauthn/register-options', {
+      method: 'POST',
+      headers: getRpcHeaders(),
+      credentials: 'same-origin',
+      body: JSON.stringify({ walletAddress }),
+    });
+    if (!optionsRes.ok) {
+      const err = await optionsRes.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to start biometric registration');
+    }
+    const options = await optionsRes.json();
+
+    // Step 2: Convert server options for WebAuthn API
+    options.challenge = base64urlToBuffer(options.challenge);
+    options.user.id = base64urlToBuffer(options.user.id);
+    if (options.excludeCredentials) {
+      options.excludeCredentials = options.excludeCredentials.map(c => ({
+        ...c, id: base64urlToBuffer(c.id),
+      }));
+    }
+
+    // Step 3: Call browser biometric API
+    const credential = await navigator.credentials.create({ publicKey: options });
+
+    // Step 4: Encode response for server
+    const attestationResponse = {
+      id: credential.id,
+      rawId: bufferToBase64url(credential.rawId),
+      type: credential.type,
+      response: {
+        clientDataJSON: bufferToBase64url(credential.response.clientDataJSON),
+        attestationObject: bufferToBase64url(credential.response.attestationObject),
+      },
+      clientExtensionResults: credential.getClientExtensionResults(),
+      authenticatorAttachment: credential.authenticatorAttachment,
+    };
+    if (credential.response.getTransports) {
+      attestationResponse.response.transports = credential.response.getTransports();
+    }
+
+    // Step 5: Verify on server
+    const verifyRes = await fetch('/api/webauthn/register-verify', {
+      method: 'POST',
+      headers: getRpcHeaders(),
+      credentials: 'same-origin',
+      body: JSON.stringify(attestationResponse),
+    });
+    if (!verifyRes.ok) {
+      const err = await verifyRes.json().catch(() => ({}));
+      throw new Error(err.error || 'Biometric registration failed');
+    }
+    return await verifyRes.json();
+  }
+
+  // Authenticate with biometric — returns { bioToken } on success
+  async function webauthnAuthenticate(walletAddress) {
+    // Step 1: Get auth options from server
+    const optionsRes = await fetch('/api/webauthn/auth-options', {
+      method: 'POST',
+      headers: getRpcHeaders(),
+      credentials: 'same-origin',
+      body: JSON.stringify({ walletAddress }),
+    });
+    if (!optionsRes.ok) {
+      const err = await optionsRes.json().catch(() => ({}));
+      if (err.needsRegistration) throw new Error('NO_BIOMETRIC_REGISTERED');
+      throw new Error(err.error || 'Failed to start biometric auth');
+    }
+    const options = await optionsRes.json();
+
+    // Step 2: Convert for WebAuthn API
+    options.challenge = base64urlToBuffer(options.challenge);
+    if (options.allowCredentials) {
+      options.allowCredentials = options.allowCredentials.map(c => ({
+        ...c, id: base64urlToBuffer(c.id),
+      }));
+    }
+
+    // Step 3: Call browser biometric API
+    const assertion = await navigator.credentials.get({ publicKey: options });
+
+    // Step 4: Encode response
+    const authResponse = {
+      id: assertion.id,
+      rawId: bufferToBase64url(assertion.rawId),
+      type: assertion.type,
+      response: {
+        clientDataJSON: bufferToBase64url(assertion.response.clientDataJSON),
+        authenticatorData: bufferToBase64url(assertion.response.authenticatorData),
+        signature: bufferToBase64url(assertion.response.signature),
+      },
+      clientExtensionResults: assertion.getClientExtensionResults(),
+      authenticatorAttachment: assertion.authenticatorAttachment,
+    };
+    if (assertion.response.userHandle) {
+      authResponse.response.userHandle = bufferToBase64url(assertion.response.userHandle);
+    }
+
+    // Step 5: Verify on server
+    const verifyRes = await fetch('/api/webauthn/auth-verify', {
+      method: 'POST',
+      headers: getRpcHeaders(),
+      credentials: 'same-origin',
+      body: JSON.stringify(authResponse),
+    });
+    if (!verifyRes.ok) {
+      const err = await verifyRes.json().catch(() => ({}));
+      throw new Error(err.error || 'Biometric verification failed. Transaction declined.');
+    }
+    return await verifyRes.json();
+  }
+
+  // Remove biometric credential (requires biometric verification first)
+  async function webauthnRemove(walletAddress) {
+    // First authenticate to prove ownership
+    const auth = await webauthnAuthenticate(walletAddress);
+    // Then delete
+    const res = await fetch('/api/webauthn/credential', {
+      method: 'DELETE',
+      headers: { ...getRpcHeaders(), 'X-Biometric-Token': auth.bioToken },
+      credentials: 'same-origin',
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to remove biometric');
+    }
+    return await res.json();
+  }
+
+  // Guard wrapper: Require biometric before protected operations.
+  // Returns the bioToken string. If no biometric is registered, returns empty string.
+  async function requireBiometric(walletAddress) {
+    if (!isBrowser || !isWebAuthnAvailable() || !walletAddress) return '';
+    const status = await checkBiometricStatus(walletAddress);
+    if (!status.registered) return ''; // No biometric registered — allow without
+    const result = await webauthnAuthenticate(walletAddress);
+    return result.bioToken || '';
+  }
+
+  // Prompt user to register biometric after wallet create/restore
+  async function promptBiometricRegistration(walletAddress) {
+    if (!isBrowser || !isWebAuthnAvailable() || !walletAddress) return;
+    try {
+      const status = await checkBiometricStatus(walletAddress);
+      if (status.registered) return; // Already registered
+      // Show custom modal instead of confirm()
+      showBiometricRegistrationModal(walletAddress);
+    } catch (_) {}
+  }
+
+  function showBiometricRegistrationModal(walletAddress) {
+    const existing = document.getElementById('biometricRegModal');
+    if (existing) existing.remove();
+    const modal = document.createElement('div');
+    modal.id = 'biometricRegModal';
+    modal.className = 'modal-overlay';
+    modal.innerHTML = '<div class="modal-box biometric-modal">'
+      + '<div class="biometric-icon">&#128274;</div>'
+      + '<h3>Secure Your Wallet</h3>'
+      + '<p>Protect transactions with biometric authentication (Face ID, Touch ID, fingerprint, or Windows Hello).</p>'
+      + '<p class="text-muted" style="font-size:.82rem">Once enabled, all sends, stakes, and swaps will require your biometric before processing.</p>'
+      + '<div class="biometric-modal-buttons">'
+      + '<button class="btn btn-primary" id="btnBioEnable">Enable Biometric</button>'
+      + '<button class="btn btn-ghost" id="btnBioSkip">Skip for now</button>'
+      + '</div>'
+      + '</div>';
+    document.body.appendChild(modal);
+
+    document.getElementById('btnBioEnable').addEventListener('click', async () => {
+      const btn = document.getElementById('btnBioEnable');
+      btn.disabled = true;
+      btn.textContent = 'Verifying...';
+      try {
+        await webauthnRegister(walletAddress);
+        modal.remove();
+        // Tell server about the wallet hash
+        await fetch('/api/session/set-wallet', {
+          method: 'POST', headers: getRpcHeaders(), credentials: 'same-origin',
+          body: JSON.stringify({ walletAddress }),
+        }).catch(() => {});
+        showBiometricToast('Biometric enabled! Transactions now require your biometric.');
+      } catch (e) {
+        btn.disabled = false;
+        btn.textContent = 'Enable Biometric';
+        const msg = e.message || '';
+        if (/cancel|abort|not allowed/i.test(msg)) {
+          // User cancelled — just dismiss
+          modal.remove();
+        } else {
+          alert('Biometric registration failed: ' + msg);
+        }
+      }
+    });
+
+    document.getElementById('btnBioSkip').addEventListener('click', () => {
+      modal.remove();
+    });
+  }
+
+  function showBiometricToast(message) {
+    const toast = document.createElement('div');
+    toast.className = 'biometric-toast';
+    toast.textContent = message;
+    document.body.appendChild(toast);
+    setTimeout(() => { toast.classList.add('show'); }, 50);
+    setTimeout(() => {
+      toast.classList.remove('show');
+      setTimeout(() => toast.remove(), 300);
+    }, 3500);
+  }
+
+  // Notify server of current wallet address (for biometric enforcement)
+  async function notifyServerWalletAddress(walletAddress) {
+    if (!isBrowser || !walletAddress) return;
+    try {
+      await fetch('/api/session/set-wallet', {
+        method: 'POST', headers: getRpcHeaders(), credentials: 'same-origin',
+        body: JSON.stringify({ walletAddress }),
+      });
+    } catch (_) {}
+  }
+
   async function configureWalletRpcMoneroStyle() {
     try {
       await rpcImmediate('auto_refresh', { enable: true, period: AUTO_REFRESH_PERIOD_SEC }, { timeoutMs: 5000 });
@@ -818,7 +1081,7 @@ window.addEventListener('unhandledrejection', function(e) {
     return getRpcUrl();
   }
 
-  function getRpcHeaders() {
+  function getRpcHeaders(bioToken) {
     const headers = { 'Content-Type': 'application/json' };
     // Browser mode: send session ID as header (more reliable than cookies through proxies)
     if (isBrowser && browserSessionId) {
@@ -827,6 +1090,10 @@ window.addEventListener('unhandledrejection', function(e) {
     // Include CSRF token on all requests
     if (isBrowser && csrfToken) {
       headers['X-CSRF-Token'] = csrfToken;
+    }
+    // Include biometric token if provided
+    if (bioToken) {
+      headers['X-Biometric-Token'] = bioToken;
     }
     return headers;
   }
@@ -952,7 +1219,7 @@ window.addEventListener('unhandledrejection', function(e) {
         try {
           res = await fetch(url + '/json_rpc', {
             method: 'POST',
-            headers: getRpcHeaders(),
+            headers: getRpcHeaders(options.bioToken),
             credentials: 'same-origin',
             body: JSON.stringify({
               jsonrpc: '2.0',
@@ -983,7 +1250,22 @@ window.addEventListener('unhandledrejection', function(e) {
           data = {};
         }
         if (!res.ok) {
+          const errCode = data.error && data.error.code;
           const msg = (data.error && data.error.message) ? data.error.message : ('RPC request failed: ' + res.status);
+          // Auto-handle BIOMETRIC_REQUIRED: prompt biometric and retry once
+          if (res.status === 403 && errCode === 'BIOMETRIC_REQUIRED' && !options._bioRetried) {
+            try {
+              const bioToken = await requireBiometric(currentWalletAddress);
+              if (bioToken) {
+                options._bioRetried = true;
+                options.bioToken = bioToken;
+                continue; // retry the RPC with the bioToken
+              }
+            } catch (bioErr) {
+              throw new Error('Biometric verification failed: ' + (bioErr.message || 'Cancelled'));
+            }
+            throw new Error('Biometric authentication required for this operation.');
+          }
           const hint502 = isBrowser ? ' The wallet server may be temporarily unavailable.' : LOCAL_NODE_HINT;
           if (res.status === 502 && attempt < RPC_RETRY_ATTEMPTS && isRetryableRpcError(msg, 502)) {
             lastErr = new Error(msg + hint502);
@@ -1792,6 +2074,8 @@ window.addEventListener('unhandledrejection', function(e) {
       const result = await rpc('get_address', { account_index: 0 });
       const addr = result.address || result.addresses?.[0]?.address || '';
       currentWalletAddress = addr || '';
+      // Notify server of wallet address for biometric enforcement
+      if (addr) notifyServerWalletAddress(addr);
       if (addr && typeof window._triggerSwapSync === 'function') {
         window._triggerSwapSync();
       }
@@ -2947,6 +3231,13 @@ window.addEventListener('unhandledrejection', function(e) {
       if (available < burnAtomic) {
         throw new Error('Not enough USDm for swap');
       }
+      // ===== Biometric verification before burn/swap =====
+      let burnBioToken = '';
+      try {
+        burnBioToken = await requireBiometric(currentWalletAddress);
+      } catch (bioErr) {
+        throw new Error('Biometric verification failed: ' + (bioErr.message || 'Cancelled'));
+      }
       // Send the full amount to the provably-unspendable burn address.
       // Coins sent there are permanently destroyed (nobody has the spend key).
       const res = await rpc('transfer', {
@@ -2956,7 +3247,7 @@ window.addEventListener('unhandledrejection', function(e) {
         get_tx_key: true,
         get_tx_hex: false,
         get_tx_metadata: false,
-      });
+      }, { bioToken: burnBioToken });
       await swapFetch(`/api/swaps/${swapId}/burn`, { method: 'POST', body: { tx_hash: res.tx_hash } });
       persistSwap({ swap_id: swapId, status: 'burn_submitted', burn_tx: res.tx_hash });
       setStatus('Burn submitted. Waiting for confirmation…');
@@ -3252,6 +3543,14 @@ window.addEventListener('unhandledrejection', function(e) {
         showMessage('sendMessage', 'Transaction cancelled.', false);
         return;
       }
+      // ===== Biometric verification before send =====
+      let bioToken = '';
+      try {
+        bioToken = await requireBiometric(currentWalletAddress);
+      } catch (bioErr) {
+        showMessage('sendMessage', 'Biometric verification failed: ' + (bioErr.message || 'Cancelled'), true);
+        return;
+      }
       showMessage('sendMessage', 'Sending…');
       try {
         const amount = Number(amountAtomic);
@@ -3262,7 +3561,7 @@ window.addEventListener('unhandledrejection', function(e) {
           get_tx_key: true,
           get_tx_hex: false,
           get_tx_metadata: false,
-        });
+        }, { bioToken });
         const txHash = txResult && (txResult.tx_hash || txResult.txid) || '';
         const explorerBase = DEFAULT_EXPLORER_URL;
         const sendMsgEl = document.getElementById('sendMessage');
@@ -3419,6 +3718,15 @@ window.addEventListener('unhandledrejection', function(e) {
         const id = btn.dataset.unstake;
         btn.disabled = true;
         btn.textContent = 'Unstaking...';
+        // ===== Biometric verification before unstake =====
+        let unstakeBioToken = '';
+        try {
+          unstakeBioToken = await requireBiometric(currentWalletAddress);
+        } catch (bioErr) {
+          showMessage('stakeMessage', 'Biometric verification failed: ' + (bioErr.message || 'Cancelled'), true);
+          btn.disabled = false;
+          return;
+        }
         try {
           // First get the stake details to retrieve key_images
           const infoRes = await fetch(getStakingUrl() + '/api/staking/stakes/' + id);
@@ -3437,7 +3745,10 @@ window.addEventListener('unhandledrejection', function(e) {
           const keyImages = stakeInfo.key_images || (data.key_images) || [];
           for (const ki of keyImages) {
             try {
-              await rpc('thaw', { key_image: ki });
+              // Each thaw needs a fresh bioToken (one-time use)
+              let thawBioToken = '';
+              try { thawBioToken = await requireBiometric(currentWalletAddress); } catch (_) {}
+              await rpc('thaw', { key_image: ki }, { bioToken: thawBioToken });
             } catch (_) { /* output may already be thawed or spent */ }
           }
 
@@ -3479,6 +3790,17 @@ window.addEventListener('unhandledrejection', function(e) {
       btnStake.textContent = 'Staking...';
       showMessage('stakeMessage', 'Preparing stake...', false);
 
+      // ===== Biometric verification before stake =====
+      let bioToken = '';
+      try {
+        bioToken = await requireBiometric(currentWalletAddress);
+      } catch (bioErr) {
+        showMessage('stakeMessage', 'Biometric verification failed: ' + (bioErr.message || 'Cancelled'), true);
+        btnStake.disabled = false;
+        btnStake.textContent = 'Stake';
+        return;
+      }
+
       try {
         const target = BigInt(amountAtomic);
 
@@ -3497,7 +3819,7 @@ window.addEventListener('unhandledrejection', function(e) {
             destinations: [{ amount: Number(target), address: currentWalletAddress }],
             priority: 1,
             ring_size: 0, // FCMP++ — no ring signatures needed
-          });
+          }, { bioToken });
           stakeTxHash = splitResult.tx_hash || '';
 
           // Wait for the self-transfer to be mined (auto-miner should pick it up)
@@ -3524,9 +3846,11 @@ window.addEventListener('unhandledrejection', function(e) {
           } catch (_) {}
         }
 
-        // Step 2: Freeze the exact output
+        // Step 2: Freeze the exact output — need fresh bioToken (previous was one-time use)
         showMessage('stakeMessage', 'Freezing output and creating stake...', false);
-        await rpc('freeze', { key_image: exactMatch.key_image });
+        let freezeBioToken = '';
+        try { freezeBioToken = await requireBiometric(currentWalletAddress); } catch (_) {}
+        await rpc('freeze', { key_image: exactMatch.key_image }, { bioToken: freezeBioToken });
         const keyImages = [exactMatch.key_image];
 
         // Step 3: Create stake on the staking service with exact amount
@@ -3854,6 +4178,16 @@ window.addEventListener('unhandledrejection', function(e) {
       btnCreateLoan.disabled = true;
       btnCreateLoan.textContent = 'Creating loan...';
 
+      // ===== Biometric verification before loan creation =====
+      try {
+        await requireBiometric(currentWalletAddress);
+      } catch (bioErr) {
+        showMessage('loanMessage', 'Biometric verification failed: ' + (bioErr.message || 'Cancelled'), true);
+        btnCreateLoan.disabled = false;
+        btnCreateLoan.textContent = 'Create Loan';
+        return;
+      }
+
       try {
         const res = await fetch(getLendingUrl() + '/api/loans', {
           method: 'POST',
@@ -4073,6 +4407,107 @@ window.addEventListener('unhandledrejection', function(e) {
         clearTimeout(connectWatchdog);
       }
     });
+
+    // ===== Biometric Security Settings =====
+    const biometricCard = document.getElementById('biometricCard');
+    if (biometricCard && isBrowser) {
+      const btnEnable = document.getElementById('btnBiometricEnable');
+      const btnRemove = document.getElementById('btnBiometricRemove');
+      const indicator = document.getElementById('biometricIndicator');
+      const statusLabel = document.getElementById('biometricStatusLabel');
+      const bioMsg = document.getElementById('biometricMessage');
+
+      async function updateBiometricUI() {
+        if (!isWebAuthnAvailable()) {
+          indicator.style.color = '#888';
+          statusLabel.textContent = 'Biometric not available in this browser';
+          if (btnEnable) btnEnable.style.display = 'none';
+          if (btnRemove) btnRemove.style.display = 'none';
+          return;
+        }
+        if (!currentWalletAddress) {
+          indicator.style.color = '#888';
+          statusLabel.textContent = 'Connect a wallet first';
+          if (btnEnable) btnEnable.style.display = 'none';
+          if (btnRemove) btnRemove.style.display = 'none';
+          return;
+        }
+        try {
+          const status = await checkBiometricStatus(currentWalletAddress);
+          if (status.registered) {
+            indicator.style.color = '#4caf50';
+            indicator.textContent = '\u25CF';
+            statusLabel.textContent = 'Biometric enabled — transactions require verification';
+            if (btnEnable) btnEnable.style.display = 'none';
+            if (btnRemove) btnRemove.style.display = '';
+          } else {
+            indicator.style.color = '#ff6600';
+            indicator.textContent = '\u25CB';
+            statusLabel.textContent = 'Biometric not enabled';
+            if (btnEnable) btnEnable.style.display = '';
+            if (btnRemove) btnRemove.style.display = 'none';
+          }
+        } catch (_) {
+          indicator.style.color = '#888';
+          statusLabel.textContent = 'Could not check biometric status';
+        }
+      }
+
+      if (btnEnable) {
+        btnEnable.addEventListener('click', async () => {
+          btnEnable.disabled = true;
+          btnEnable.textContent = 'Verifying...';
+          try {
+            await webauthnRegister(currentWalletAddress);
+            await notifyServerWalletAddress(currentWalletAddress);
+            if (bioMsg) { bioMsg.textContent = 'Biometric enabled!'; bioMsg.classList.remove('error'); }
+            updateBiometricUI();
+          } catch (e) {
+            const msg = e.message || '';
+            if (!/cancel|abort|not allowed/i.test(msg)) {
+              if (bioMsg) { bioMsg.textContent = 'Failed: ' + msg; bioMsg.classList.add('error'); }
+            }
+          } finally {
+            btnEnable.disabled = false;
+            btnEnable.textContent = 'Enable Biometric';
+          }
+        });
+      }
+
+      if (btnRemove) {
+        btnRemove.addEventListener('click', async () => {
+          if (!confirm('Remove biometric from this wallet? Transactions will no longer require verification.')) return;
+          btnRemove.disabled = true;
+          btnRemove.textContent = 'Removing...';
+          try {
+            await webauthnRemove(currentWalletAddress);
+            if (bioMsg) { bioMsg.textContent = 'Biometric removed.'; bioMsg.classList.remove('error'); }
+            updateBiometricUI();
+          } catch (e) {
+            const msg = e.message || '';
+            if (!/cancel|abort|not allowed/i.test(msg)) {
+              if (bioMsg) { bioMsg.textContent = 'Failed: ' + msg; bioMsg.classList.add('error'); }
+            }
+          } finally {
+            btnRemove.disabled = false;
+            btnRemove.textContent = 'Remove Biometric';
+          }
+        });
+      }
+
+      // Refresh biometric status when settings page becomes visible
+      updateBiometricUI();
+      const settingsPage = document.getElementById('pageSettings');
+      if (settingsPage) {
+        const observer = new MutationObserver(() => {
+          if (settingsPage.classList.contains('active')) updateBiometricUI();
+        });
+        observer.observe(settingsPage, { attributes: true, attributeFilter: ['class'] });
+      }
+    } else if (biometricCard && !isBrowser) {
+      // Desktop mode — hide biometric card (only for browser wallet)
+      biometricCard.classList.add('hidden');
+    }
   }
 
   /* ── Local Node ──────────────────────────────────────────── */
@@ -5024,6 +5459,13 @@ window.addEventListener('unhandledrejection', function(e) {
         createdWalletFilename = '';
         showMainApp();
         initMainApp();
+        // Prompt biometric registration after wallet creation
+        setTimeout(() => {
+          if (currentWalletAddress) {
+            notifyServerWalletAddress(currentWalletAddress);
+            promptBiometricRegistration(currentWalletAddress);
+          }
+        }, 3000);
       } catch (e) {
         if (msg) { msg.textContent = 'Error: ' + (e.message || 'Failed to finalize wallet'); msg.classList.add('error'); }
       }
@@ -5197,6 +5639,12 @@ window.addEventListener('unhandledrejection', function(e) {
           await refreshBalances({ force: true }).catch(() => {});
           await refreshTransfers().catch(() => {});
           showSyncStatus('', false);
+
+          // Prompt biometric registration after successful restore
+          if (currentWalletAddress) {
+            await notifyServerWalletAddress(currentWalletAddress);
+            setTimeout(() => promptBiometricRegistration(currentWalletAddress), 1500);
+          }
         } catch (e) {
           const errMsg = (e.message || 'Unknown');
           const isCacheErr = /bad_alloc|corrupt|archive|portable_binary|Failed to open wallet/i.test(errMsg);

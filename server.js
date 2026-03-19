@@ -10,6 +10,14 @@ const path = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 
+// WebAuthn/FIDO2 biometric authentication
+const {
+  generateRegistrationOptions,
+  verifyRegistrationResponse,
+  generateAuthenticationOptions,
+  verifyAuthenticationResponse,
+} = require('@simplewebauthn/server');
+
 const PORT = parseInt(process.env.PORT || '3000', 10);
 const DAEMON_RPC = process.env.DAEMON_RPC_URL || 'http://127.0.0.1:17750';
 
@@ -91,6 +99,56 @@ function logSecurity(event, details) {
     ...(details || {}),
   });
   if (securityLogStream) securityLogStream.write(entry + '\n');
+}
+
+// ===== WebAuthn credential storage =====
+const CREDENTIALS_DIR = '/var/lib/monerousd/credentials';
+try { fs.mkdirSync(CREDENTIALS_DIR, { recursive: true, mode: 0o700 }); } catch (_) {}
+
+function walletHash(address) {
+  return crypto.createHash('sha256').update(String(address)).digest('hex');
+}
+
+function credentialPath(wHash) {
+  // Sanitize to prevent path traversal
+  const safe = wHash.replace(/[^a-f0-9]/g, '');
+  return path.join(CREDENTIALS_DIR, safe + '.json');
+}
+
+function loadCredential(wHash) {
+  try {
+    const data = fs.readFileSync(credentialPath(wHash), 'utf8');
+    return JSON.parse(data);
+  } catch (_) { return null; }
+}
+
+function saveCredential(wHash, cred) {
+  const tmp = credentialPath(wHash) + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(cred, null, 2), { mode: 0o600 });
+  fs.renameSync(tmp, credentialPath(wHash));
+}
+
+function deleteCredential(wHash) {
+  try { fs.unlinkSync(credentialPath(wHash)); } catch (_) {}
+}
+
+function hasCredential(wHash) {
+  try { return fs.existsSync(credentialPath(wHash)); } catch (_) { return false; }
+}
+
+// RP ID extraction from request Host header
+function getRpId(req) {
+  const host = (req.headers.host || '').split(':')[0].toLowerCase();
+  // For localhost/127.0.0.1, use 'localhost'
+  if (host === '127.0.0.1' || host === '::1' || !host) return 'localhost';
+  return host;
+}
+
+function getOrigin(req) {
+  // Reconstruct origin from request
+  const proto = req.headers['x-forwarded-proto'] || 'http';
+  const host = req.headers.host || 'localhost:3000';
+  return proto + '://' + host;
 }
 
 function getClientIp(req) {
@@ -643,6 +701,253 @@ const server = http.createServer(async (req, res) => {
     return sendJson(res, 200, { status: 'closed' });
   }
 
+  // --- WebAuthn biometric authentication API ---
+
+  // Helper: read JSON body from request
+  function readJsonBody(req, maxSize) {
+    return new Promise((resolve, reject) => {
+      let body = '';
+      let size = 0;
+      const limit = maxSize || 16 * 1024;
+      req.on('data', (chunk) => {
+        size += chunk.length;
+        if (size > limit) { req.destroy(); reject(new Error('Body too large')); return; }
+        body += chunk;
+      });
+      req.on('end', () => {
+        try { resolve(JSON.parse(body || '{}')); }
+        catch (_) { reject(new Error('Invalid JSON')); }
+      });
+      req.on('error', reject);
+    });
+  }
+
+  // GET /api/webauthn/status?address=<walletAddress>
+  if (req.method === 'GET' && req.url.startsWith('/api/webauthn/status')) {
+    const session = getSession(req);
+    if (!session) return sendJson(res, 401, { error: 'Session required' });
+    const urlObj = new URL(req.url, 'http://localhost');
+    const address = urlObj.searchParams.get('address') || '';
+    if (!address) return sendJson(res, 400, { error: 'address parameter required' });
+    const wHash = walletHash(address);
+    return sendJson(res, 200, { registered: hasCredential(wHash), walletHash: wHash });
+  }
+
+  // POST /api/webauthn/register-options
+  if (req.method === 'POST' && req.url === '/api/webauthn/register-options') {
+    const session = getSession(req);
+    if (!session) return sendJson(res, 401, { error: 'Session required' });
+    try {
+      const body = await readJsonBody(req);
+      const address = body.walletAddress;
+      if (!address) return sendJson(res, 400, { error: 'walletAddress required' });
+      const wHash = walletHash(address);
+      if (hasCredential(wHash)) {
+        return sendJson(res, 409, { error: 'Biometric already registered for this wallet. Remove it first to re-register.' });
+      }
+      const rpID = getRpId(req);
+      const userIDBytes = crypto.createHash('sha256').update(wHash).digest();
+      // Convert to Uint8Array for WebAuthn
+      const userID = new Uint8Array(userIDBytes);
+      const options = await generateRegistrationOptions({
+        rpName: 'MoneroUSD',
+        rpID,
+        userID,
+        userName: address.slice(0, 12) + '...' + address.slice(-6),
+        userDisplayName: 'MoneroUSD Wallet',
+        authenticatorSelection: {
+          authenticatorAttachment: 'platform',
+          residentKey: 'preferred',
+          userVerification: 'required',
+        },
+        attestationType: 'none',
+      });
+      // Store challenge in session
+      session._webauthnRegChallenge = {
+        challenge: options.challenge,
+        walletHash: wHash,
+        walletAddress: address,
+        expiresAt: Date.now() + 120000,
+      };
+      return sendJson(res, 200, options);
+    } catch (e) {
+      logSecurity('webauthn_register_options_error', { ip: clientIp, error: e.message });
+      return sendJson(res, 500, { error: 'Failed to generate registration options' });
+    }
+  }
+
+  // POST /api/webauthn/register-verify
+  if (req.method === 'POST' && req.url === '/api/webauthn/register-verify') {
+    const session = getSession(req);
+    if (!session) return sendJson(res, 401, { error: 'Session required' });
+    if (!session._webauthnRegChallenge || Date.now() > session._webauthnRegChallenge.expiresAt) {
+      return sendJson(res, 400, { error: 'Registration challenge expired. Start again.' });
+    }
+    try {
+      const body = await readJsonBody(req);
+      const rpID = getRpId(req);
+      const expectedOrigin = getOrigin(req);
+      // Build allowed origins list
+      const origins = [expectedOrigin, ...ALLOWED_ORIGINS];
+      const verification = await verifyRegistrationResponse({
+        response: body,
+        expectedChallenge: session._webauthnRegChallenge.challenge,
+        expectedOrigin: origins,
+        expectedRPID: rpID,
+        requireUserVerification: true,
+      });
+      if (!verification.verified || !verification.registrationInfo) {
+        logSecurity('webauthn_register_failed', { ip: clientIp });
+        return sendJson(res, 403, { error: 'Biometric registration verification failed' });
+      }
+      const { credential } = verification.registrationInfo;
+      const wHash = session._webauthnRegChallenge.walletHash;
+      // Save credential to disk
+      saveCredential(wHash, {
+        credentialId: Buffer.from(credential.id).toString('base64url'),
+        credentialPublicKey: Buffer.from(credential.publicKey).toString('base64url'),
+        counter: credential.counter,
+        transports: credential.transports || ['internal'],
+        walletHash: wHash,
+        createdAt: new Date().toISOString(),
+      });
+      session.walletHash = wHash;
+      delete session._webauthnRegChallenge;
+      logSecurity('webauthn_registered', { ip: clientIp, walletHash: wHash });
+      return sendJson(res, 200, { success: true });
+    } catch (e) {
+      logSecurity('webauthn_register_verify_error', { ip: clientIp, error: e.message });
+      return sendJson(res, 500, { error: 'Registration verification error: ' + e.message });
+    }
+  }
+
+  // POST /api/webauthn/auth-options
+  if (req.method === 'POST' && req.url === '/api/webauthn/auth-options') {
+    const session = getSession(req);
+    if (!session) return sendJson(res, 401, { error: 'Session required' });
+    try {
+      const body = await readJsonBody(req);
+      const address = body.walletAddress;
+      if (!address) return sendJson(res, 400, { error: 'walletAddress required' });
+      const wHash = walletHash(address);
+      const cred = loadCredential(wHash);
+      if (!cred) {
+        return sendJson(res, 404, { error: 'No biometric registered for this wallet', needsRegistration: true });
+      }
+      const rpID = getRpId(req);
+      const credIdBytes = Buffer.from(cred.credentialId, 'base64url');
+      const options = await generateAuthenticationOptions({
+        rpID,
+        allowCredentials: [{
+          id: credIdBytes,
+          type: 'public-key',
+          transports: cred.transports || ['internal'],
+        }],
+        userVerification: 'required',
+      });
+      session._webauthnAuthChallenge = {
+        challenge: options.challenge,
+        walletHash: wHash,
+        expiresAt: Date.now() + 120000,
+      };
+      return sendJson(res, 200, options);
+    } catch (e) {
+      logSecurity('webauthn_auth_options_error', { ip: clientIp, error: e.message });
+      return sendJson(res, 500, { error: 'Failed to generate auth options' });
+    }
+  }
+
+  // POST /api/webauthn/auth-verify
+  if (req.method === 'POST' && req.url === '/api/webauthn/auth-verify') {
+    const session = getSession(req);
+    if (!session) return sendJson(res, 401, { error: 'Session required' });
+    if (!session._webauthnAuthChallenge || Date.now() > session._webauthnAuthChallenge.expiresAt) {
+      return sendJson(res, 400, { error: 'Auth challenge expired. Try again.' });
+    }
+    try {
+      const body = await readJsonBody(req);
+      const wHash = session._webauthnAuthChallenge.walletHash;
+      const cred = loadCredential(wHash);
+      if (!cred) {
+        return sendJson(res, 404, { error: 'Credential not found' });
+      }
+      const rpID = getRpId(req);
+      const expectedOrigin = getOrigin(req);
+      const origins = [expectedOrigin, ...ALLOWED_ORIGINS];
+      const credIdBytes = Buffer.from(cred.credentialId, 'base64url');
+      const pubKeyBytes = Buffer.from(cred.credentialPublicKey, 'base64url');
+      const verification = await verifyAuthenticationResponse({
+        response: body,
+        expectedChallenge: session._webauthnAuthChallenge.challenge,
+        expectedOrigin: origins,
+        expectedRPID: rpID,
+        requireUserVerification: true,
+        credential: {
+          id: credIdBytes,
+          publicKey: pubKeyBytes,
+          counter: cred.counter,
+          transports: cred.transports || ['internal'],
+        },
+      });
+      if (!verification.verified) {
+        logSecurity('webauthn_auth_failed', { ip: clientIp, walletHash: wHash });
+        return sendJson(res, 403, { error: 'Biometric verification failed. Transaction declined.' });
+      }
+      // Update counter
+      cred.counter = verification.authenticationInfo.newCounter;
+      saveCredential(wHash, cred);
+      // Generate one-time biometric auth token
+      const bioToken = crypto.randomBytes(32).toString('hex');
+      if (!session.bioTokens) session.bioTokens = new Map();
+      session.bioTokens.set(bioToken, {
+        expiresAt: Date.now() + 60000, // 60 seconds
+        walletHash: wHash,
+      });
+      session.walletHash = wHash;
+      delete session._webauthnAuthChallenge;
+      logSecurity('webauthn_auth_success', { ip: clientIp, walletHash: wHash });
+      return sendJson(res, 200, { success: true, bioToken });
+    } catch (e) {
+      logSecurity('webauthn_auth_verify_error', { ip: clientIp, error: e.message });
+      return sendJson(res, 500, { error: 'Auth verification error: ' + e.message });
+    }
+  }
+
+  // DELETE /api/webauthn/credential — remove biometric (requires biometric verification first)
+  if (req.method === 'DELETE' && req.url === '/api/webauthn/credential') {
+    const session = getSession(req);
+    if (!session) return sendJson(res, 401, { error: 'Session required' });
+    // Must provide a valid bioToken to remove a credential (proves biometric ownership)
+    const bioToken = req.headers['x-biometric-token'] || '';
+    if (!bioToken || !session.bioTokens) {
+      return sendJson(res, 403, { error: 'Biometric verification required to remove credential' });
+    }
+    const tokenData = session.bioTokens.get(bioToken);
+    if (!tokenData || Date.now() > tokenData.expiresAt) {
+      return sendJson(res, 403, { error: 'Biometric token expired' });
+    }
+    const wHash = tokenData.walletHash;
+    deleteCredential(wHash);
+    session.bioTokens.delete(bioToken);
+    logSecurity('webauthn_credential_removed', { ip: clientIp, walletHash: wHash });
+    return sendJson(res, 200, { success: true });
+  }
+
+  // POST /api/session/set-wallet — link wallet address to session for biometric validation
+  if (req.method === 'POST' && req.url === '/api/session/set-wallet') {
+    const session = getSession(req);
+    if (!session) return sendJson(res, 401, { error: 'Session required' });
+    try {
+      const body = await readJsonBody(req);
+      if (body.walletAddress) {
+        session.walletHash = walletHash(body.walletAddress);
+      }
+      return sendJson(res, 200, { success: true });
+    } catch (_) {
+      return sendJson(res, 400, { error: 'Invalid request' });
+    }
+  }
+
   // --- Swap service proxy (same-origin for browser) ---
 
   if (req.url.startsWith('/api/swap-proxy/')) {
@@ -776,6 +1081,35 @@ const server = http.createServer(async (req, res) => {
           logSecurity('csrf_transfer_blocked', { ip: clientIp });
           return sendJson(res, 403, { error: { message: 'CSRF token required for transfers' } });
         }
+      }
+
+      // ===== Biometric enforcement for protected operations =====
+      const BIOMETRIC_PROTECTED_METHODS = new Set(['transfer', 'freeze', 'thaw']);
+      if (BIOMETRIC_PROTECTED_METHODS.has(method) && session) {
+        const bioToken = req.headers['x-biometric-token'] || '';
+        // Check if this wallet has a registered biometric
+        const wHash = session.walletHash;
+        if (wHash && hasCredential(wHash)) {
+          if (!bioToken) {
+            return sendJson(res, 403, { error: { message: 'Biometric authentication required', code: 'BIOMETRIC_REQUIRED' } });
+          }
+          if (!session.bioTokens) {
+            return sendJson(res, 403, { error: { message: 'Biometric token invalid', code: 'BIOMETRIC_REQUIRED' } });
+          }
+          const tokenData = session.bioTokens.get(bioToken);
+          if (!tokenData || Date.now() > tokenData.expiresAt) {
+            logSecurity('biometric_token_expired', { ip: clientIp, method });
+            return sendJson(res, 403, { error: { message: 'Biometric token expired. Please verify again.', code: 'BIOMETRIC_REQUIRED' } });
+          }
+          // CRITICAL: Verify biometric was registered for THIS wallet, not a different one
+          if (tokenData.walletHash !== wHash) {
+            logSecurity('biometric_wallet_mismatch', { ip: clientIp, method, expected: wHash, got: tokenData.walletHash });
+            return sendJson(res, 403, { error: { message: 'Biometric does not match this wallet. Transaction declined.' } });
+          }
+          // One-time use — consume the token
+          session.bioTokens.delete(bioToken);
+        }
+        // If no credential registered, allow through (biometric is optional until registered)
       }
 
       const PROXY_TIMEOUT_MS = method === 'refresh' ? 600000

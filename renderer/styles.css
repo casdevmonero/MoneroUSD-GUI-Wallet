@@ -2006,3 +2006,86 @@ body {
   border-radius: 2px;
   transition: width 0.3s ease;
 }
+
+/* ===== Biometric Authentication Styles ===== */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+  z-index: 9999;
+  padding: 16px;
+  animation: bioFadeIn 0.2s ease;
+}
+
+@keyframes bioFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.biometric-modal {
+  background: var(--monero-card, #1e1e2e);
+  border: 1px solid var(--monero-border, #333);
+  border-radius: 16px;
+  padding: 32px;
+  width: min(400px, 90vw);
+  text-align: center;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+
+.biometric-icon {
+  font-size: 3rem;
+  margin-bottom: 12px;
+}
+
+.biometric-modal h3 {
+  margin: 0 0 12px;
+  font-size: 1.3rem;
+  color: var(--text, #fff);
+}
+
+.biometric-modal p {
+  margin: 0 0 8px;
+  font-size: .9rem;
+  color: var(--text2, #aaa);
+  line-height: 1.5;
+}
+
+.biometric-modal-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.biometric-modal-buttons .btn {
+  width: 100%;
+  padding: 12px;
+  font-size: .95rem;
+}
+
+.biometric-toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%) translateY(20px);
+  background: #1a7a3a;
+  color: #fff;
+  padding: 12px 24px;
+  border-radius: 8px;
+  font-size: .9rem;
+  z-index: 10000;
+  opacity: 0;
+  transition: opacity 0.3s ease, transform 0.3s ease;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  pointer-events: none;
+}
+
+.biometric-toast.show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}

@@ -245,7 +245,7 @@ const CONCURRENT_RPC_METHODS = new Set([
   'get_version', 'get_address', 'get_balance', 'get_height',
   'get_accounts', 'get_transfers', 'get_transfer_by_txid',
   'query_key', 'get_languages', 'get_attribute',
-  'auto_refresh',
+  'auto_refresh', 'incoming_transfers', 'refresh',
 ]);
 
 // ===== Session Manager =====

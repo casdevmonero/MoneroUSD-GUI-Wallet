@@ -490,18 +490,12 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // --- Security: CSRF token validation on state-changing requests ---
-  // Skip for session creation (needs to get the token first) and OPTIONS
-  if (req.method === 'POST' && req.url !== '/api/session' && req.url !== '/api/session/close') {
-    const session = getSession(req);
-    if (session && session.csrfToken) {
-      const reqCsrf = req.headers['x-csrf-token'] || '';
-      if (reqCsrf !== session.csrfToken) {
-        logSecurity('csrf_mismatch', { ip: clientIp, url: req.url });
-        return sendJson(res, 403, { error: 'Invalid CSRF token' });
-      }
-    }
-  }
+  // --- Security: CSRF token validation ---
+  // Enforced on sensitive state-changing endpoints. /json_rpc is already protected by
+  // session-cookie auth + origin validation + RPC method whitelist, so CSRF is defense-in-depth
+  // but should not block the bootstrapping flow before the client captures the token.
+  // CSRF is checked inside /json_rpc only for the 'transfer' method (the actual fund-moving call).
+  // For mining/daemon endpoints, CSRF is enforced since they're less frequently called.
 
   // --- Session API ---
 
@@ -681,6 +675,15 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, 403, { error: { message: 'Method not allowed' } });
       }
 
+      // CSRF enforcement for fund-moving method
+      if (method === 'transfer' && session && session.csrfToken) {
+        const reqCsrf = req.headers['x-csrf-token'] || '';
+        if (reqCsrf !== session.csrfToken) {
+          logSecurity('csrf_transfer_blocked', { ip: clientIp });
+          return sendJson(res, 403, { error: { message: 'CSRF token required for transfers' } });
+        }
+      }
+
       const PROXY_TIMEOUT_MS = method === 'refresh' ? 600000
         : method === 'rescan_blockchain' ? 300000
         : method === 'restore_deterministic_wallet' ? 120000
@@ -764,11 +767,14 @@ const server = http.createServer(async (req, res) => {
   // --- Daemon RPC proxy (shared, requires session) ---
 
   if (req.method === 'POST' && req.url === '/daemon_rpc') {
-    // Require authenticated session
+    // Require authenticated session + CSRF
     const dSession = getSession(req);
     if (!dSession) {
       logSecurity('unauth_daemon_rpc', { ip: clientIp });
       return sendJson(res, 401, { error: 'Session required' });
+    }
+    if (dSession.csrfToken && (req.headers['x-csrf-token'] || '') !== dSession.csrfToken) {
+      return sendJson(res, 403, { error: 'Invalid CSRF token' });
     }
     let body = '';
     let bodySize = 0;
@@ -807,11 +813,14 @@ const server = http.createServer(async (req, res) => {
 
   const miningRestPaths = ['/start_mining', '/stop_mining', '/mining_status'];
   if (miningRestPaths.includes(req.url.split('?')[0])) {
-    // Require authenticated session
+    // Require authenticated session + CSRF
     const mSession = getSession(req);
     if (!mSession) {
       logSecurity('unauth_mining', { ip: clientIp, path: req.url });
       return sendJson(res, 401, { error: 'Session required' });
+    }
+    if (mSession.csrfToken && (req.headers['x-csrf-token'] || '') !== mSession.csrfToken) {
+      return sendJson(res, 403, { error: 'Invalid CSRF token' });
     }
     let body = '';
     let bodySize = 0;

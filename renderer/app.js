@@ -524,7 +524,7 @@ window.addEventListener('unhandledrejection', function(e) {
       try {
         const resp = await fetch(window.location.origin + '/daemon_rpc', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: getRpcHeaders(),
           credentials: 'same-origin',
           body: JSON.stringify({ jsonrpc: '2.0', id: '0', method: 'get_info', params: {} }),
         });
@@ -734,7 +734,7 @@ window.addEventListener('unhandledrejection', function(e) {
       try {
         const resp = await fetch(daemonUrl, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: getRpcHeaders(),
           credentials: 'same-origin',
           body: JSON.stringify({ jsonrpc: '2.0', id: '0', method: 'get_info', params: {} }),
         });
@@ -4176,7 +4176,7 @@ window.addEventListener('unhandledrejection', function(e) {
         try {
           const res = await fetch('/daemon_rpc', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: getRpcHeaders(),
             body: JSON.stringify({ jsonrpc: '2.0', id: '0', method: 'get_info', params: {} }),
           });
           const data = await res.json();
@@ -4255,7 +4255,7 @@ window.addEventListener('unhandledrejection', function(e) {
         } else {
           const res = await fetch('/daemon_rpc', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: getRpcHeaders(),
             body: JSON.stringify({ jsonrpc: '2.0', id: '0', method: 'get_info', params: {} }),
           });
           const data = await res.json();
@@ -4298,7 +4298,7 @@ window.addEventListener('unhandledrejection', function(e) {
           // Browser mode - poll daemon_rpc
           const res = await fetch('/daemon_rpc', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: getRpcHeaders(),
             body: JSON.stringify({ jsonrpc: '2.0', id: '0', method: 'get_info', params: {} }),
           });
           const data = await res.json();
@@ -4406,7 +4406,7 @@ window.addEventListener('unhandledrejection', function(e) {
       try {
         const res = await fetch('/start_mining', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: getRpcHeaders(),
           body: JSON.stringify({
             miner_address: currentWalletAddress,
             threads_count: threads,
@@ -4432,7 +4432,7 @@ window.addEventListener('unhandledrejection', function(e) {
     btnStop.addEventListener('click', async () => {
       btnStop.disabled = true;
       try {
-        await fetch('/stop_mining', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+        await fetch('/stop_mining', { method: 'POST', headers: getRpcHeaders(), body: '{}' });
         showMessage('miningMessage', 'Mining stopped.', false);
       } catch (_) {}
       stopMiningStatusPoll();
@@ -4447,7 +4447,7 @@ window.addEventListener('unhandledrejection', function(e) {
 
   async function checkMiningStatus() {
     try {
-      const res = await fetch('/mining_status', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      const res = await fetch('/mining_status', { method: 'POST', headers: getRpcHeaders(), body: '{}' });
       const data = await res.json();
       if (data.active) {
         updateMiningUI(true, data);
@@ -4464,7 +4464,7 @@ window.addEventListener('unhandledrejection', function(e) {
     stopMiningStatusPoll();
     miningPollTimer = setInterval(async () => {
       try {
-        const res = await fetch('/mining_status', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+        const res = await fetch('/mining_status', { method: 'POST', headers: getRpcHeaders(), body: '{}' });
         const data = await res.json();
         updateMiningUI(data.active, data);
         if (!data.active) {

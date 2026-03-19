@@ -184,6 +184,8 @@ function getClientIp(req) {
 function validateOrigin(req) {
   const origin = req.headers.origin || '';
   if (!origin) return true; // Same-origin requests don't send Origin header
+  // Allow Electron desktop app origins (file://, app://, null)
+  if (origin === 'null' || origin === 'file://' || origin.startsWith('app://')) return true;
   return ALLOWED_ORIGINS.has(origin);
 }
 
@@ -648,7 +650,8 @@ async function destroySession(token) {
 }
 
 function getSession(req) {
-  const token = parseCookie(req, 'musd_session');
+  // Try cookie first, then X-Session-Id header (for Electron desktop / cross-origin)
+  const token = parseCookie(req, 'musd_session') || req.headers['x-session-id'] || null;
   if (!token) return null;
   const session = sessions.get(token);
   if (!session) return null;
@@ -705,6 +708,37 @@ const server = http.createServer(async (req, res) => {
 
   const clientIp = getClientIp(req);
 
+  // --- CORS preflight for Electron desktop and allowed origins ---
+  if (req.method === 'OPTIONS') {
+    const origin = req.headers.origin || '';
+    if (origin === 'null' || origin === 'file://' || origin.startsWith('app://') || ALLOWED_ORIGINS.has(origin)) {
+      res.writeHead(204, {
+        'Access-Control-Allow-Origin': origin === 'null' ? '*' : origin,
+        'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type, X-Session-Id, X-CSRF-Token, X-Biometric-Token',
+        'Access-Control-Allow-Credentials': 'true',
+        'Access-Control-Max-Age': '86400',
+      });
+      res.end();
+      return;
+    }
+  }
+
+  // --- CORS: Set headers early for all responses from Electron / allowed origins ---
+  const reqOrigin = req.headers.origin || '';
+  if (reqOrigin && (reqOrigin === 'null' || reqOrigin === 'file://' || reqOrigin.startsWith('app://') || ALLOWED_ORIGINS.has(reqOrigin))) {
+    const originalWriteHead = res.writeHead.bind(res);
+    res.writeHead = function(statusCode, reasonOrHeaders, headers) {
+      const h = headers || (typeof reasonOrHeaders === 'object' ? reasonOrHeaders : {});
+      if (!h['Access-Control-Allow-Origin']) {
+        h['Access-Control-Allow-Origin'] = reqOrigin === 'null' ? '*' : reqOrigin;
+        h['Access-Control-Allow-Credentials'] = 'true';
+      }
+      if (headers) return originalWriteHead(statusCode, reasonOrHeaders, headers);
+      return originalWriteHead(statusCode, h);
+    };
+  }
+
   // --- Security: Global rate limiting ---
   if (!checkGlobalRate(clientIp)) {
     logSecurity('rate_limit_global', { ip: clientIp, url: req.url });
@@ -738,16 +772,16 @@ const server = http.createServer(async (req, res) => {
     // Create a new session (or return existing)
     let existing = getSession(req);
     if (existing && existing.state === 'ready') {
-      return sendJson(res, 200, { status: 'ready', port: existing.port, csrfToken: existing.csrfToken });
+      return sendJson(res, 200, { status: 'ready', session_id: existing.token, port: existing.port, csrfToken: existing.csrfToken });
     }
     if (existing && (existing.state === 'starting' || existing.state === 'restarting')) {
-      return sendJson(res, 200, { status: existing.state, csrfToken: existing.csrfToken });
+      return sendJson(res, 200, { status: existing.state, session_id: existing.token, csrfToken: existing.csrfToken });
     }
     // Dead — try auto-restart before destroying
     if (existing && existing.state === 'dead') {
       await autoRestartSession(existing);
       if (existing.state === 'ready') {
-        return sendJson(res, 200, { status: 'ready', port: existing.port, csrfToken: existing.csrfToken });
+        return sendJson(res, 200, { status: 'ready', session_id: existing.token, port: existing.port, csrfToken: existing.csrfToken });
       }
       await destroySession(existing.token);
     }
@@ -769,7 +803,7 @@ const server = http.createServer(async (req, res) => {
     sessionsByIp.get(clientIp).add(session.token);
     logSecurity('session_created', { ip: clientIp, port: session.port });
     setSessionCookie(res, session.token);
-    return sendJson(res, 200, { status: session.state, csrfToken: session.csrfToken });
+    return sendJson(res, 200, { status: session.state, session_id: session.token, csrfToken: session.csrfToken });
   }
 
   if (req.method === 'GET' && req.url === '/api/session/status') {

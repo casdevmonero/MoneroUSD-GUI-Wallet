@@ -1217,12 +1217,14 @@ window.addEventListener('unhandledrejection', function(e) {
 
   function getRpcHeaders(bioToken) {
     const headers = { 'Content-Type': 'application/json' };
-    // Browser mode: send session ID as header (more reliable than cookies through proxies)
-    if (isBrowser && browserSessionId) {
+    // Send session ID as header (works for both browser and desktop/Electron)
+    // Desktop (Electron) cross-origin cookies are unreliable (SameSite=Strict),
+    // so X-Session-Id is the primary session identifier for desktop mode.
+    if (browserSessionId) {
       headers['X-Session-Id'] = browserSessionId;
     }
     // Include CSRF token on all requests
-    if (isBrowser && csrfToken) {
+    if (csrfToken) {
       headers['X-CSRF-Token'] = csrfToken;
     }
     // Include biometric token if provided
@@ -6315,11 +6317,17 @@ window.addEventListener('unhandledrejection', function(e) {
   });
 
   // Initialize a per-user wallet-rpc session on the server
+  // Works for both browser (relative URLs) and desktop (absolute relay URL)
   async function initBrowserSession() {
+    const baseUrl = isBrowser ? '' : (getRpcUrl() || RELAY_RPC_URL);
     // Retry session creation up to 3 times on failure
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        const resp = await fetch('/api/session', { method: 'POST', credentials: 'same-origin' });
+        const resp = await fetch(baseUrl + '/api/session', {
+          method: 'POST',
+          credentials: isBrowser ? 'same-origin' : 'omit',
+          headers: browserSessionId ? { 'X-Session-Id': browserSessionId } : {},
+        });
         const data = await resp.json();
         if (data.session_id) browserSessionId = data.session_id;
         if (data.csrfToken) csrfToken = data.csrfToken;
@@ -6328,8 +6336,8 @@ window.addEventListener('unhandledrejection', function(e) {
           // Poll until ready (max 8s with faster intervals)
           for (let i = 0; i < 20; i++) {
             await new Promise(ok => setTimeout(ok, 400));
-            const r = await fetch('/api/session/status', {
-              credentials: 'same-origin',
+            const r = await fetch(baseUrl + '/api/session/status', {
+              credentials: isBrowser ? 'same-origin' : 'omit',
               headers: browserSessionId ? { 'X-Session-Id': browserSessionId } : {},
             });
             const d = await r.json();
@@ -6408,12 +6416,12 @@ window.addEventListener('unhandledrejection', function(e) {
       return;
     }
 
-    // Desktop (Electron): pre-warm relay session in background so RPC is ready
-    // when user creates/restores a wallet. This avoids a 10-20s delay on first RPC call.
-    if (window.electronAPI && typeof window.electronAPI.initRemoteSession === 'function') {
-      const relayUrl = storageGet(RPC_STORAGE_KEY) || DEFAULT_RPC;
-      window.electronAPI.initRemoteSession(relayUrl).catch(() => {});
-    }
+    // Desktop (Electron): initialize relay session so RPC calls have a persistent session.
+    // Without this, each fetch to monerousd.org creates a new session (SameSite=Strict cookies
+    // aren't sent cross-origin from Electron), so wallet state is lost between calls.
+    initBrowserSession().then((ok) => {
+      debugLog('Desktop relay session: ' + (ok ? 'ready' : 'failed') + ', sessionId: ' + (browserSessionId ? browserSessionId.slice(0,8) + '…' : 'none'));
+    }).catch(() => {});
 
     // Desktop (Electron): auto-open last wallet if previously onboarded
     if (isOnboarded()) {

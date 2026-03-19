@@ -1,3 +1,47 @@
+/* ===== Self-hosted fonts (no external CDN dependency) ===== */
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/jetbrainsmono-400.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('/fonts/jetbrainsmono-600.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Outfit';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/outfit-400.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Outfit';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('/fonts/outfit-500.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Outfit';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('/fonts/outfit-600.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Outfit';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('/fonts/outfit-700.woff2') format('woff2');
+}
+
 /* Monero USD Desktop - Monero logo colors */
 :root {
   --monero-orange: #FF6600;
@@ -1050,6 +1094,44 @@ body {
 .recent-status-success {
   background: rgba(76, 175, 80, 0.12);
   color: #4caf50;
+}
+
+/* ===== Inactivity Lock Overlay ===== */
+#lockOverlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.92);
+  z-index: 99999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(8px);
+}
+.lock-dialog {
+  background: var(--monero-card, #242424);
+  border: 1px solid var(--monero-border, #333);
+  border-radius: var(--radius, 12px);
+  padding: 3rem 2.5rem;
+  text-align: center;
+  max-width: 400px;
+  width: 90%;
+}
+.lock-dialog h2 {
+  color: var(--monero-orange, #FF6600);
+  margin: 0 0 1rem 0;
+  font-size: 1.5rem;
+}
+.lock-dialog p {
+  color: var(--monero-muted, #888);
+  margin: 0 0 1.5rem 0;
+  line-height: 1.5;
+}
+.lock-dialog .btn {
+  padding: 0.75rem 2rem;
+  font-size: 1rem;
 }
 
 .recent-tx-link {

@@ -18,12 +18,102 @@ const WALLET_RPC_BIN = process.env.WALLET_RPC_BIN
   || '/root/MoneroUSD/MoneroUSD-main/build-linux/bin/USDm-wallet-rpc';
 const DAEMON_ADDRESS = 'http://127.0.0.1:17750';
 
+// ===== Security: Allowed origins (exact match, no regex bypass) =====
+const ALLOWED_ORIGINS = new Set([
+  'https://monerousd.org',
+  'https://www.monerousd.org',
+  'https://app.monerousd.org',
+  'http://monerousd.org',
+  'http://www.monerousd.org',
+  'http://app.monerousd.org',
+  'http://localhost:3000',
+  'http://127.0.0.1:3000',
+]);
+
+// ===== Security: RPC method whitelist =====
+const ALLOWED_RPC_METHODS = new Set([
+  'create_wallet', 'open_wallet', 'close_wallet', 'get_balance',
+  'get_address', 'get_height', 'refresh', 'transfer', 'get_transfers',
+  'restore_deterministic_wallet', 'query_key', 'store',
+  'get_transfer_by_txid', 'get_version', 'get_accounts',
+  'get_languages', 'get_attribute', 'auto_refresh',
+  'change_wallet_password', 'rescan_blockchain', 'set_daemon',
+  'incoming_transfers',
+]);
+
+// ===== Security: Per-IP session limits =====
+const MAX_SESSIONS_PER_IP = 3;
+const sessionsByIp = new Map(); // ip -> Set<token>
+
+// ===== Security: Rate limiting for all endpoints =====
+const GLOBAL_RATE_WINDOW = 60 * 1000;
+const GLOBAL_RATE_MAX = 120; // 120 req/min per IP
+const RPC_RATE_MAX = 60;     // 60 req/min per IP for RPC
+const globalRateMap = new Map(); // ip -> { count, resetAt }
+const rpcRateMap = new Map();    // ip -> { count, resetAt }
+
+function checkGlobalRate(ip) {
+  const now = Date.now();
+  let entry = globalRateMap.get(ip);
+  if (!entry || now > entry.resetAt) {
+    entry = { count: 0, resetAt: now + GLOBAL_RATE_WINDOW };
+    globalRateMap.set(ip, entry);
+  }
+  entry.count++;
+  return entry.count <= GLOBAL_RATE_MAX;
+}
+
+function checkRpcRate(ip) {
+  const now = Date.now();
+  let entry = rpcRateMap.get(ip);
+  if (!entry || now > entry.resetAt) {
+    entry = { count: 0, resetAt: now + GLOBAL_RATE_WINDOW };
+    rpcRateMap.set(ip, entry);
+  }
+  entry.count++;
+  return entry.count <= RPC_RATE_MAX;
+}
+
+// ===== Security: Audit logging =====
+const SECURITY_LOG_PATH = '/var/log/monerousd/security.log';
+let securityLogStream = null;
+try {
+  fs.mkdirSync('/var/log/monerousd', { recursive: true, mode: 0o700 });
+  securityLogStream = fs.createWriteStream(SECURITY_LOG_PATH, { flags: 'a' });
+} catch (_) {}
+
+function logSecurity(event, details) {
+  const entry = JSON.stringify({
+    timestamp: new Date().toISOString(),
+    event,
+    ...(details || {}),
+  });
+  if (securityLogStream) securityLogStream.write(entry + '\n');
+}
+
+function getClientIp(req) {
+  // Only trust X-Forwarded-For from loopback (nginx)
+  const remote = req.socket.remoteAddress || '';
+  if (remote === '127.0.0.1' || remote === '::1' || remote === '::ffff:127.0.0.1') {
+    return req.headers['x-forwarded-for']?.split(',')[0]?.trim()
+      || req.headers['x-real-ip']
+      || remote;
+  }
+  return remote;
+}
+
+function validateOrigin(req) {
+  const origin = req.headers.origin || '';
+  if (!origin) return true; // Same-origin requests don't send Origin header
+  return ALLOWED_ORIGINS.has(origin);
+}
+
 // Per-user session config
 const SESSION_PORT_START = 28000;
 const SESSION_PORT_END   = 28999;
 const MAX_SESSIONS       = 200;
 const SESSION_IDLE_MS    = 30 * 60 * 1000;  // 30 min idle timeout
-const SESSION_DIR_BASE   = '/tmp/musd-sessions';
+const SESSION_DIR_BASE   = '/var/lib/monerousd/sessions'; // Moved from /tmp for security (restricted permissions)
 const CLEANUP_INTERVAL   = 60 * 1000;       // check every 60s
 const SESSION_MAX_AGE_MS = 12 * 60 * 60 * 1000; // 12 hr absolute session timeout
 
@@ -49,6 +139,12 @@ setInterval(() => {
   for (const [ip, entry] of rateLimitMap) {
     if (now > entry.resetAt) rateLimitMap.delete(ip);
   }
+  for (const [ip, entry] of globalRateMap) {
+    if (now > entry.resetAt) globalRateMap.delete(ip);
+  }
+  for (const [ip, entry] of rpcRateMap) {
+    if (now > entry.resetAt) rpcRateMap.delete(ip);
+  }
 }, 5 * 60 * 1000);
 
 const MIMES = {
@@ -58,6 +154,9 @@ const MIMES = {
   '.ico': 'image/x-icon',
   '.png': 'image/png',
   '.svg': 'image/svg+xml',
+  '.woff2': 'font/woff2',
+  '.woff': 'font/woff',
+  '.ttf': 'font/ttf',
 };
 
 const rendererDir = path.join(__dirname, 'renderer');
@@ -293,6 +392,15 @@ async function destroySession(token) {
   session.state = 'closing';
   sessions.delete(token);
 
+  // Clean up per-IP session tracking
+  if (session.clientIp) {
+    const ipSet = sessionsByIp.get(session.clientIp);
+    if (ipSet) {
+      ipSet.delete(token);
+      if (ipSet.size === 0) sessionsByIp.delete(session.clientIp);
+    }
+  }
+
   // Try graceful close_wallet
   try {
     await walletRpc(session.port, 'close_wallet', {}, 3000);
@@ -364,44 +472,85 @@ function sendJson(res, status, obj) {
 
 const server = http.createServer(async (req, res) => {
 
+  const clientIp = getClientIp(req);
+
+  // --- Security: Global rate limiting ---
+  if (!checkGlobalRate(clientIp)) {
+    logSecurity('rate_limit_global', { ip: clientIp, url: req.url });
+    return sendJson(res, 429, { error: 'Too many requests. Please slow down.' });
+  }
+
+  // --- Security: Origin validation on all non-GET requests ---
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    if (!validateOrigin(req)) {
+      logSecurity('origin_rejected', { ip: clientIp, origin: req.headers.origin, url: req.url });
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Forbidden' }));
+      return;
+    }
+  }
+
+  // --- Security: CSRF token validation on state-changing requests ---
+  // Skip for session creation (needs to get the token first) and OPTIONS
+  if (req.method === 'POST' && req.url !== '/api/session' && req.url !== '/api/session/close') {
+    const session = getSession(req);
+    if (session && session.csrfToken) {
+      const reqCsrf = req.headers['x-csrf-token'] || '';
+      if (reqCsrf !== session.csrfToken) {
+        logSecurity('csrf_mismatch', { ip: clientIp, url: req.url });
+        return sendJson(res, 403, { error: 'Invalid CSRF token' });
+      }
+    }
+  }
+
   // --- Session API ---
 
   if (req.method === 'POST' && req.url === '/api/session') {
     // Rate limit session creation per IP
-    const clientIp = req.headers['x-forwarded-for']?.split(',')[0]?.trim()
-      || req.headers['x-real-ip']
-      || req.socket.remoteAddress || '';
     if (!checkRateLimit(clientIp)) {
       return sendJson(res, 429, { error: 'Too many sessions. Please wait a moment and try again.' });
     }
     // Create a new session (or return existing)
     let existing = getSession(req);
     if (existing && existing.state === 'ready') {
-      return sendJson(res, 200, { status: 'ready', port: existing.port });
+      return sendJson(res, 200, { status: 'ready', port: existing.port, csrfToken: existing.csrfToken });
     }
     if (existing && (existing.state === 'starting' || existing.state === 'restarting')) {
-      return sendJson(res, 200, { status: existing.state });
+      return sendJson(res, 200, { status: existing.state, csrfToken: existing.csrfToken });
     }
     // Dead — try auto-restart before destroying
     if (existing && existing.state === 'dead') {
       await autoRestartSession(existing);
       if (existing.state === 'ready') {
-        return sendJson(res, 200, { status: 'ready', port: existing.port });
+        return sendJson(res, 200, { status: 'ready', port: existing.port, csrfToken: existing.csrfToken });
       }
       await destroySession(existing.token);
+    }
+    // Per-IP session limit
+    const ipSessions = sessionsByIp.get(clientIp);
+    if (ipSessions && ipSessions.size >= MAX_SESSIONS_PER_IP) {
+      logSecurity('session_limit_exceeded', { ip: clientIp });
+      return sendJson(res, 429, { error: 'Too many active sessions. Please close a tab and try again.' });
     }
     const session = await createSession();
     if (!session) {
       return sendJson(res, 503, { error: 'Server at capacity. Please try again later.' });
     }
+    // Generate CSRF token for this session
+    session.csrfToken = crypto.randomBytes(32).toString('hex');
+    session.clientIp = clientIp;
+    // Track per-IP sessions
+    if (!sessionsByIp.has(clientIp)) sessionsByIp.set(clientIp, new Set());
+    sessionsByIp.get(clientIp).add(session.token);
+    logSecurity('session_created', { ip: clientIp, port: session.port });
     setSessionCookie(res, session.token);
-    return sendJson(res, 200, { status: session.state });
+    return sendJson(res, 200, { status: session.state, csrfToken: session.csrfToken });
   }
 
   if (req.method === 'GET' && req.url === '/api/session/status') {
     const session = getSession(req);
     if (!session) return sendJson(res, 200, { status: 'none' });
-    return sendJson(res, 200, { status: session.state });
+    return sendJson(res, 200, { status: session.state, csrfToken: session.csrfToken });
   }
 
   if (req.method === 'DELETE' && req.url === '/api/session') {
@@ -423,14 +572,17 @@ const server = http.createServer(async (req, res) => {
   // --- Swap service proxy (same-origin for browser) ---
 
   if (req.url.startsWith('/api/swap-proxy/')) {
+    const swapOrigin = req.headers.origin || '';
+    const swapCorsOrigin = ALLOWED_ORIGINS.has(swapOrigin) ? swapOrigin : '';
     // CORS preflight
     if (req.method === 'OPTIONS') {
-      res.writeHead(204, {
-        'Access-Control-Allow-Origin': '*',
+      const preflightHeaders = {
         'Access-Control-Allow-Methods': 'GET, POST, PUT, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type',
+        'Access-Control-Allow-Headers': 'Content-Type, X-CSRF-Token',
         'Access-Control-Max-Age': '86400',
-      });
+      };
+      if (swapCorsOrigin) preflightHeaders['Access-Control-Allow-Origin'] = swapCorsOrigin;
+      res.writeHead(204, preflightHeaders);
       res.end();
       return;
     }
@@ -441,13 +593,14 @@ const server = http.createServer(async (req, res) => {
       headers: { ...req.headers, host: '127.0.0.1:8787' },
       timeout: 15000,
     }, (proxyRes) => {
-      res.writeHead(proxyRes.statusCode, {
+      const respHeaders = {
         'Content-Type': proxyRes.headers['content-type'] || 'application/json',
-        'Access-Control-Allow-Origin': '*',
         'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
         'Pragma': 'no-cache',
         'Expires': '0',
-      });
+      };
+      if (swapCorsOrigin) respHeaders['Access-Control-Allow-Origin'] = swapCorsOrigin;
+      res.writeHead(proxyRes.statusCode, respHeaders);
       proxyRes.pipe(res);
     });
     proxyReq.on('error', () => {
@@ -466,7 +619,7 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'POST' && req.url === '/json_rpc') {
     let body = '';
     let bodySize = 0;
-    const MAX_BODY = 5 * 1024 * 1024;
+    const MAX_BODY = 64 * 1024; // 64KB — wallet RPC payloads are small
     req.on('data', (chunk) => {
       bodySize += chunk.length;
       if (bodySize > MAX_BODY) { req.destroy(); res.writeHead(413); res.end('Request too large'); return; }
@@ -510,11 +663,23 @@ const server = http.createServer(async (req, res) => {
 
       session.lastActivity = Date.now();
 
+      // RPC rate limiting
+      if (!checkRpcRate(clientIp)) {
+        logSecurity('rate_limit_rpc', { ip: clientIp });
+        return sendJson(res, 429, { error: { message: 'Too many RPC requests. Please slow down.' } });
+      }
+
       let method = '';
       try {
         const parsedBody = JSON.parse(body || '{}');
         method = (parsedBody.method || '').toString();
       } catch (_) {}
+
+      // RPC method whitelist
+      if (method && !ALLOWED_RPC_METHODS.has(method)) {
+        logSecurity('rpc_method_blocked', { ip: clientIp, method });
+        return sendJson(res, 403, { error: { message: 'Method not allowed' } });
+      }
 
       const PROXY_TIMEOUT_MS = method === 'refresh' ? 600000
         : method === 'rescan_blockchain' ? 300000
@@ -578,9 +743,8 @@ const server = http.createServer(async (req, res) => {
               : 'Wallet RPC timed out. Please refresh the page.');
             resolve();
           });
-          proxy.on('error', (e) => {
-            const msg = (e && e.message) || '';
-            send502('Wallet RPC error: ' + msg + '. Please refresh the page to start a new session.');
+          proxy.on('error', () => {
+            send502('Wallet RPC error. Please refresh the page to start a new session.');
             resolve();
           });
           proxy.write(body);
@@ -597,12 +761,18 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // --- Daemon RPC proxy (shared, not per-session) ---
+  // --- Daemon RPC proxy (shared, requires session) ---
 
   if (req.method === 'POST' && req.url === '/daemon_rpc') {
+    // Require authenticated session
+    const dSession = getSession(req);
+    if (!dSession) {
+      logSecurity('unauth_daemon_rpc', { ip: clientIp });
+      return sendJson(res, 401, { error: 'Session required' });
+    }
     let body = '';
     let bodySize = 0;
-    const MAX_BODY = 5 * 1024 * 1024;
+    const MAX_BODY = 16 * 1024; // 16KB limit for daemon RPC
     req.on('data', (chunk) => {
       bodySize += chunk.length;
       if (bodySize > MAX_BODY) { req.destroy(); res.writeHead(413); res.end('Request too large'); return; }
@@ -626,19 +796,30 @@ const server = http.createServer(async (req, res) => {
         });
       });
       proxy.setTimeout(30000, () => { proxy.destroy(); res.writeHead(502, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: { message: 'Daemon RPC timed out' } })); });
-      proxy.on('error', (e) => { res.writeHead(502, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: { message: 'Daemon unreachable: ' + (e.message || '') } })); });
+      proxy.on('error', () => { res.writeHead(502, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: { message: 'Daemon unreachable' } })); });
       proxy.write(body);
       proxy.end();
     });
     return;
   }
 
-  // --- Mining REST proxy (shared) ---
+  // --- Mining REST proxy (requires session) ---
 
   const miningRestPaths = ['/start_mining', '/stop_mining', '/mining_status'];
   if (miningRestPaths.includes(req.url.split('?')[0])) {
+    // Require authenticated session
+    const mSession = getSession(req);
+    if (!mSession) {
+      logSecurity('unauth_mining', { ip: clientIp, path: req.url });
+      return sendJson(res, 401, { error: 'Session required' });
+    }
     let body = '';
-    req.on('data', (chunk) => (body += chunk));
+    let bodySize = 0;
+    req.on('data', (chunk) => {
+      bodySize += chunk.length;
+      if (bodySize > 16 * 1024) { req.destroy(); return; }
+      body += chunk;
+    });
     req.on('end', () => {
       const dParsed = parseTarget(DAEMON_RPC) || { hostname: '127.0.0.1', port: '17750', protocol: 'http:' };
       const opts = {
@@ -654,15 +835,15 @@ const server = http.createServer(async (req, res) => {
         rpcRes.on('data', (chunk) => (buf += chunk));
         rpcRes.on('end', () => {
           const origin = req.headers.origin || '';
-          const allowedOrigin = /^https?:\/\/(localhost|127\.0\.0\.1|.*\.monerousd\.org|monerousd\.org)(:\d+)?$/.test(origin) ? origin : '';
+          const corsOrigin = ALLOWED_ORIGINS.has(origin) ? origin : '';
           const corsHeaders = { 'Content-Type': 'application/json' };
-          if (allowedOrigin) corsHeaders['Access-Control-Allow-Origin'] = allowedOrigin;
+          if (corsOrigin) corsHeaders['Access-Control-Allow-Origin'] = corsOrigin;
           res.writeHead(rpcRes.statusCode || 200, corsHeaders);
           res.end(buf);
         });
       });
-      proxy.setTimeout(15000, () => { proxy.destroy(); res.writeHead(502, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Daemon timeout' })); });
-      proxy.on('error', (e) => { res.writeHead(502, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Daemon unreachable: ' + e.message })); });
+      proxy.setTimeout(15000, () => { proxy.destroy(); sendJson(res, 502, { error: 'Daemon timeout' }); });
+      proxy.on('error', () => { sendJson(res, 502, { error: 'Daemon unreachable' }); });
       if (body) proxy.write(body);
       proxy.end();
     });
@@ -724,7 +905,7 @@ process.on('SIGINT', shutdownAll);
 
 // ===== Start server =====
 
-const HOST = process.env.HOST || '0.0.0.0';
+const HOST = process.env.HOST || '127.0.0.1'; // Only accessible via nginx reverse proxy
 server.listen(PORT, HOST, () => {
   console.log('');
   console.log('  MoneroUSD Wallet (browser) — per-user wallet-rpc');

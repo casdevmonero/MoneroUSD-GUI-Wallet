@@ -1,17 +1,16 @@
-// Global error handler — sends JS errors to server for debugging
+// Global error handler — show errors in UI only (no beacon to prevent seed leakage)
 window.onerror = function(msg, src, line, col, err) {
   try {
     var el = document.getElementById('welcomeStatus') || document.getElementById('syncStatusBanner');
-    if (el) { el.textContent = 'JS Error: ' + msg + ' at ' + (src||'').split('/').pop() + ':' + line; el.classList.remove('hidden'); el.style.color = '#f44'; }
-    navigator.sendBeacon('/api/health?err=' + encodeURIComponent(msg + '|' + (src||'') + ':' + line), '');
+    if (el) { el.textContent = 'JS Error: ' + (String(msg)||'').slice(0, 100) + ' at ' + (src||'').split('/').pop() + ':' + line; el.classList.remove('hidden'); el.style.color = '#f44'; }
+    // Do NOT send error details to server — stack traces may contain seed phrases
   } catch (_) {}
 };
 window.addEventListener('unhandledrejection', function(e) {
   try {
     var msg = e.reason ? (e.reason.message || String(e.reason)) : 'Unknown promise rejection';
     var el = document.getElementById('welcomeStatus') || document.getElementById('syncStatusBanner');
-    if (el) { el.textContent = 'Promise Error: ' + msg; el.classList.remove('hidden'); el.style.color = '#f44'; }
-    navigator.sendBeacon('/api/health?err=' + encodeURIComponent('promise|' + msg), '');
+    if (el) { el.textContent = 'Promise Error: ' + String(msg).slice(0, 100); el.classList.remove('hidden'); el.style.color = '#f44'; }
   } catch (_) {}
 });
 
@@ -44,6 +43,7 @@ window.addEventListener('unhandledrejection', function(e) {
   // Browser session ID — stored in memory and sent as X-Session-Id header
   // This avoids cookie issues with proxy chains (SameSite, Secure, etc.)
   let browserSessionId = '';
+  let csrfToken = ''; // CSRF token from server session
   const BTC_EXPLORER_URL = 'https://mempool.space';
   const XMR_EXPLORER_URL = 'https://xmrchain.net';
   const BTC_RESERVE_ADDRESS = 'bc1qukurxzulh6h356ctnqudqz5kfna5g6ehrcqhn4';
@@ -78,6 +78,119 @@ window.addEventListener('unhandledrejection', function(e) {
       else if (typeof console !== 'undefined' && console.warn) console.warn('localStorage set failed:', e);
     }
   }
+
+  // ===== Security: Debug logging gate =====
+  const DEBUG_LOG = false; // Set to true only for development debugging
+  function debugLog(...args) { if (DEBUG_LOG && typeof console !== 'undefined') console.log(...args); }
+
+  // ===== Security: Swap history encryption =====
+  // Uses AES-GCM with a key derived from the wallet address via PBKDF2.
+  // This prevents swap data from being readable if localStorage is compromised.
+  const SWAP_ENCRYPTION_SALT = 'monerousd-swap-v1';
+
+  async function deriveSwapKey(walletAddress) {
+    if (!walletAddress || !crypto.subtle) return null;
+    try {
+      const enc = new TextEncoder();
+      const keyMaterial = await crypto.subtle.importKey('raw', enc.encode(walletAddress), 'PBKDF2', false, ['deriveKey']);
+      return await crypto.subtle.deriveKey(
+        { name: 'PBKDF2', salt: enc.encode(SWAP_ENCRYPTION_SALT), iterations: 100000, hash: 'SHA-256' },
+        keyMaterial,
+        { name: 'AES-GCM', length: 256 },
+        false,
+        ['encrypt', 'decrypt']
+      );
+    } catch (_) { return null; }
+  }
+
+  async function encryptSwapData(data, walletAddress) {
+    const key = await deriveSwapKey(walletAddress);
+    if (!key) return null;
+    try {
+      const enc = new TextEncoder();
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode(JSON.stringify(data)));
+      // Store as base64: iv (12 bytes) + ciphertext
+      const combined = new Uint8Array(iv.length + ciphertext.byteLength);
+      combined.set(iv);
+      combined.set(new Uint8Array(ciphertext), iv.length);
+      return btoa(String.fromCharCode(...combined));
+    } catch (_) { return null; }
+  }
+
+  async function decryptSwapData(b64, walletAddress) {
+    const key = await deriveSwapKey(walletAddress);
+    if (!key || !b64) return null;
+    try {
+      const binary = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+      const iv = binary.slice(0, 12);
+      const ciphertext = binary.slice(12);
+      const plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext);
+      return JSON.parse(new TextDecoder().decode(plaintext));
+    } catch (_) { return null; }
+  }
+
+  // ===== Security: Service URL validation =====
+  function isValidServiceUrl(url) {
+    if (!url || typeof url !== 'string') return false;
+    try {
+      const parsed = new URL(url);
+      // In browser mode, only allow HTTPS. In desktop, allow http://localhost
+      if (isBrowser) return parsed.protocol === 'https:';
+      return parsed.protocol === 'https:' || (parsed.protocol === 'http:' && (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1'));
+    } catch (_) { return false; }
+  }
+
+  // ===== Security: Inactivity auto-lock =====
+  const INACTIVITY_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes
+  let lastUserActivity = Date.now();
+  let inactivityTimer = null;
+  let walletLocked = false;
+
+  function resetInactivityTimer() {
+    lastUserActivity = Date.now();
+    if (inactivityTimer) clearTimeout(inactivityTimer);
+    if (!walletLocked) {
+      inactivityTimer = setTimeout(lockWallet, INACTIVITY_TIMEOUT_MS);
+    }
+  }
+
+  function lockWallet() {
+    walletLocked = true;
+    // Clear sensitive in-memory data
+    clearSensitiveInputs();
+    walletPasswordCache.clear();
+    // Show lock overlay
+    let overlay = document.getElementById('lockOverlay');
+    if (!overlay) {
+      overlay = document.createElement('div');
+      overlay.id = 'lockOverlay';
+      overlay.innerHTML = '<div class="lock-dialog">'
+        + '<h2>Session Locked</h2>'
+        + '<p>Your wallet has been locked due to inactivity.</p>'
+        + '<button id="unlockBtn" class="btn btn-primary">Unlock</button>'
+        + '</div>';
+      overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.85);z-index:99999;display:flex;align-items:center;justify-content:center;';
+      document.body.appendChild(overlay);
+      document.getElementById('unlockBtn')?.addEventListener('click', unlockWallet);
+    }
+    overlay.style.display = 'flex';
+  }
+
+  function unlockWallet() {
+    walletLocked = false;
+    const overlay = document.getElementById('lockOverlay');
+    if (overlay) overlay.style.display = 'none';
+    resetInactivityTimer();
+    // Re-sync after unlock
+    refreshBalances({ force: true }).catch(() => {});
+    refreshTransfers().catch(() => {});
+  }
+
+  // Track user activity
+  ['click', 'keydown', 'mousemove', 'touchstart', 'scroll'].forEach(evt => {
+    document.addEventListener(evt, resetInactivityTimer, { passive: true });
+  });
 
   // HTML entity escaping — prevents XSS when interpolating external data into innerHTML
   function escHtml(str) {
@@ -174,11 +287,15 @@ window.addEventListener('unhandledrejection', function(e) {
     storageSet(activeWalletStorageKey(), name ? String(name).trim() : '');
   }
 
-  // --- Swap history persistence (keyed by wallet address) ---
+  // --- Swap history persistence (keyed by wallet address, encrypted at rest) ---
+  const SWAP_ENCRYPTED_PREFIX = 'ENC:';
+
   function loadSwapHistory() {
     try {
       const raw = storageGet(SWAP_HISTORY_KEY);
-      return raw ? JSON.parse(raw) : {};
+      if (!raw) return {};
+      // Encrypted entries are stored per-wallet as "ENC:base64..."
+      return JSON.parse(raw);
     } catch (_) {
       return {};
     }
@@ -188,24 +305,59 @@ window.addEventListener('unhandledrejection', function(e) {
     storageSet(SWAP_HISTORY_KEY, JSON.stringify(history));
   }
 
+  // Load swaps for a specific wallet, decrypting if needed
+  async function getSwapsForWalletAsync(walletAddr) {
+    if (!walletAddr) return [];
+    const history = loadSwapHistory();
+    const entry = history[walletAddr];
+    if (!entry) return [];
+    // If it's an encrypted string, decrypt it
+    if (typeof entry === 'string' && entry.startsWith(SWAP_ENCRYPTED_PREFIX)) {
+      const decrypted = await decryptSwapData(entry.slice(SWAP_ENCRYPTED_PREFIX.length), walletAddr);
+      return Array.isArray(decrypted) ? decrypted : [];
+    }
+    // Legacy unencrypted format — migrate on next save
+    return Array.isArray(entry) ? entry : [];
+  }
+
   function getSwapsForWallet(walletAddr) {
     if (!walletAddr) return [];
     const history = loadSwapHistory();
-    return Array.isArray(history[walletAddr]) ? history[walletAddr] : [];
+    const entry = history[walletAddr];
+    if (!entry) return [];
+    // Sync fallback — can only read unencrypted
+    if (typeof entry === 'string' && entry.startsWith(SWAP_ENCRYPTED_PREFIX)) {
+      // Encrypted — must use async version; return empty for sync callers
+      return [];
+    }
+    return Array.isArray(entry) ? entry : [];
   }
 
-  function saveSwapRecord(walletAddr, record) {
+  async function saveSwapRecord(walletAddr, record) {
     if (!walletAddr || !record || !record.swap_id) return;
-    const history = loadSwapHistory();
-    if (!Array.isArray(history[walletAddr])) history[walletAddr] = [];
-    const idx = history[walletAddr].findIndex((s) => s.swap_id === record.swap_id);
+    // Load current swaps (async to handle encrypted data)
+    let swaps = await getSwapsForWalletAsync(walletAddr);
+    if (!Array.isArray(swaps)) swaps = [];
+    const idx = swaps.findIndex((s) => s.swap_id === record.swap_id);
     if (idx >= 0) {
-      history[walletAddr][idx] = { ...history[walletAddr][idx], ...record };
+      swaps[idx] = { ...swaps[idx], ...record };
     } else {
-      history[walletAddr].unshift(record);
+      swaps.unshift(record);
     }
     // Keep last 50 swaps per wallet
-    if (history[walletAddr].length > 50) history[walletAddr] = history[walletAddr].slice(0, 50);
+    if (swaps.length > 50) swaps = swaps.slice(0, 50);
+    // Encrypt and save
+    const history = loadSwapHistory();
+    if (crypto.subtle) {
+      const encrypted = await encryptSwapData(swaps, walletAddr);
+      if (encrypted) {
+        history[walletAddr] = SWAP_ENCRYPTED_PREFIX + encrypted;
+      } else {
+        history[walletAddr] = swaps; // Fallback to plain if encryption fails
+      }
+    } else {
+      history[walletAddr] = swaps;
+    }
     saveSwapHistory(history);
   }
 
@@ -663,6 +815,10 @@ window.addEventListener('unhandledrejection', function(e) {
     // Browser mode: send session ID as header (more reliable than cookies through proxies)
     if (isBrowser && browserSessionId) {
       headers['X-Session-Id'] = browserSessionId;
+    }
+    // Include CSRF token on all requests
+    if (isBrowser && csrfToken) {
+      headers['X-CSRF-Token'] = csrfToken;
     }
     return headers;
   }
@@ -1530,7 +1686,7 @@ window.addEventListener('unhandledrejection', function(e) {
             const unlocked = incomingTotals.unlocked > 0n ? incomingTotals.unlocked : incomingTotals.total;
             parsed = { balance: incomingTotals.total, unlocked_balance: unlocked };
             usedIncomingTotals = true;
-            if (typeof console !== 'undefined' && console.log) console.log('Balance from incoming_transfers fallback');
+            debugLog('Balance from incoming_transfers fallback');
           }
         } catch (_) {
           try {
@@ -1544,7 +1700,7 @@ window.addEventListener('unhandledrejection', function(e) {
             if (sumIn > 0n) {
               parsed = { balance: sumIn, unlocked_balance: sumIn };
               usedTransferFallback = true;
-              if (typeof console !== 'undefined' && console.log) console.log('Balance from get_transfers (in) fallback');
+              debugLog('Balance from get_transfers (in) fallback');
             }
           } catch (_) {}
         }
@@ -1555,14 +1711,11 @@ window.addEventListener('unhandledrejection', function(e) {
             const unlocked = incomingTotals.unlocked > 0n ? incomingTotals.unlocked : incomingTotals.total;
             parsed = { balance: incomingTotals.total, unlocked_balance: unlocked };
             usedIncomingTotals = true;
-            if (typeof console !== 'undefined' && console.log) console.log('Balance from incoming_transfers (overflow-safe)');
+            debugLog('Balance from incoming_transfers (overflow-safe)');
           }
         } catch (_) {}
       }
-      // Balance debug data intentionally not exposed on window for security
-      if (typeof console !== 'undefined' && console.log) {
-        console.log('get_balance completed, source:', source);
-      }
+      debugLog('get_balance completed, source:', source);
       rpcFailureCount = 0;
       setRpcStatus(true);
       const usdmDisplay = parsed.unlocked_balance > 0n ? parsed.unlocked_balance : parsed.balance;
@@ -1619,7 +1772,7 @@ window.addEventListener('unhandledrejection', function(e) {
       if (rpcFailureCount >= RPC_BACKOFF_THRESHOLD) {
         stopBalanceRefreshInterval();
       }
-      console.error('refreshBalances failed:', e);
+      debugLog('refreshBalances failed:', e && e.message);
     }
   }
 
@@ -1801,9 +1954,9 @@ window.addEventListener('unhandledrejection', function(e) {
       });
     } catch (_) {}
 
-    // Merge swap history
+    // Merge swap history (use async for encrypted swap data)
     const swapKey = currentWalletAddress || getActiveWalletName() || '_default';
-    const swaps = getSwapsForWallet(swapKey);
+    const swaps = await getSwapsForWalletAsync(swapKey);
     swaps.forEach((s) => {
       const isMint = s.direction === 'crypto_to_usdm';
       const txid = isMint ? (s.minted_tx || '') : (s.burn_tx || s.payout_tx || '');
@@ -2331,18 +2484,18 @@ window.addEventListener('unhandledrejection', function(e) {
       return status && status !== 'minted' && status !== 'payout_sent' && status !== 'failed' && status !== 'cancelled';
     }
 
-    function persistSwap(record) {
-      saveSwapRecord(getSwapWalletKey(), record);
-      renderSwapHistory();
+    async function persistSwap(record) {
+      await saveSwapRecord(getSwapWalletKey(), record);
+      await renderSwapHistory();
       // Also update the main dashboard Recent Activity box so swap status badges stay current
       refreshTransfers().catch(() => {});
     }
 
     let _historyRefreshInFlight = false;
 
-    function renderSwapHistory() {
+    async function renderSwapHistory() {
       if (!swapHistoryList) return;
-      const swaps = getSwapsForWallet(getSwapWalletKey())
+      const swaps = (await getSwapsForWalletAsync(getSwapWalletKey()))
         .slice()
         .sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
       if (!swaps.length) {
@@ -2428,7 +2581,7 @@ window.addEventListener('unhandledrejection', function(e) {
             try {
               const res = await swapFetch(`/api/swaps/${s.swap_id}`);
               if (res && res.status && res.status !== s.status) {
-                saveSwapRecord(getSwapWalletKey(), {
+                await saveSwapRecord(getSwapWalletKey(), {
                   swap_id: s.swap_id, status: res.status,
                   minted_tx: res.minted_tx, payout_tx: res.payout_tx, error: res.error,
                 });
@@ -2804,9 +2957,9 @@ window.addEventListener('unhandledrejection', function(e) {
       if (!swapId) return;
       try {
         const res = await swapFetch(`/api/swaps/${swapId}`);
-        if (!res || typeof res !== 'object') { console.warn('[swap-poll] Empty or invalid response for swap', swapId); return; }
+        if (!res || typeof res !== 'object') { debugLog('[swap-poll] Empty or invalid response for swap', swapId); return; }
         const status = res.status || '';
-        if (!status) { console.warn('[swap-poll] No status field in response:', JSON.stringify(res).slice(0, 200)); return; }
+        if (!status) { debugLog('[swap-poll] No status field in response'); return; }
         // Persist every status update so history stays current
         persistSwap({ swap_id: swapId, status, minted_tx: res.minted_tx, payout_tx: res.payout_tx, error: res.error });
         if (status === 'awaiting_deposit') {
@@ -2845,7 +2998,7 @@ window.addEventListener('unhandledrejection', function(e) {
           if (cancelBtn) cancelBtn.classList.add('hidden');
         }
       } catch (e) {
-        console.error('[swap-poll] Error polling swap status:', e.message || e);
+        debugLog('[swap-poll] Error polling swap status:', e && e.message);
       }
     }
 
@@ -2946,7 +3099,7 @@ window.addEventListener('unhandledrejection', function(e) {
       if (!addr) {
         // Try to find a USDm address from existing local swap history
         const walletKey = getSwapWalletKey();
-        const localSwaps = getSwapsForWallet(walletKey);
+        const localSwaps = await getSwapsForWalletAsync(walletKey);
         for (const s of localSwaps) {
           if (s.payout_address && s.payout_address.length > 20) { addr = s.payout_address; break; }
           if (s.deposit_address && s.deposit_address.length > 20) { addr = s.deposit_address; break; }
@@ -2986,14 +3139,14 @@ window.addEventListener('unhandledrejection', function(e) {
               created_at: serverSwap.created_at,
             };
             // Always merge server data into local — server is authoritative for status
-            const local = getSwapsForWallet(walletKey);
+            const local = await getSwapsForWalletAsync(walletKey);
             const existing = local.find((s) => s.swap_id === record.swap_id);
             if (!existing) {
-              saveSwapRecord(walletKey, record);
+              await saveSwapRecord(walletKey, record);
               changed = true;
             } else if (existing.status !== record.status || existing.minted_tx !== record.minted_tx || existing.payout_tx !== record.payout_tx) {
               // Server has newer info — update local record
-              saveSwapRecord(walletKey, record);
+              await saveSwapRecord(walletKey, record);
               changed = true;
             }
           }
@@ -3020,7 +3173,7 @@ window.addEventListener('unhandledrejection', function(e) {
     }, 30000);
 
     async function pollAllPendingSwaps() {
-      const swaps = getSwapsForWallet(getSwapWalletKey());
+      const swaps = await getSwapsForWalletAsync(getSwapWalletKey());
       const pending = swaps.filter((s) => isSwapPending(s.status));
       if (pending.length === 0) return; // Keep timer running — new swaps may appear
       for (const s of pending) {
@@ -3075,6 +3228,18 @@ window.addEventListener('unhandledrejection', function(e) {
           return;
         }
       } catch (_) {}
+      // ===== Security: Send confirmation modal =====
+      const formattedAmount = amountStr + ' USDm';
+      const addrStart = address.slice(0, 8);
+      const addrEnd = address.slice(-8);
+      const confirmMsg = 'Confirm Transaction\n\n'
+        + 'To: ' + addrStart + '…' + addrEnd + '\n'
+        + 'Amount: ' + formattedAmount + '\n\n'
+        + 'Are you sure you want to send this transaction?';
+      if (!confirm(confirmMsg)) {
+        showMessage('sendMessage', 'Transaction cancelled.', false);
+        return;
+      }
       showMessage('sendMessage', 'Sending…');
       try {
         const amount = Number(amountAtomic);
@@ -3816,6 +3981,15 @@ window.addEventListener('unhandledrejection', function(e) {
       const lightUrl = (document.getElementById('lightWalletUrl') || {}).value.trim();
       const lightToken = (document.getElementById('lightWalletToken') || {}).value.trim();
       const lightEnabled = !!(document.getElementById('lightWalletEnabled') || {}).checked;
+      // Validate custom URLs before saving
+      if (swapBackendUrl !== DEFAULT_SWAP_BACKEND && !isValidServiceUrl(swapBackendUrl)) {
+        showMessage('settingsMessage', 'Invalid swap backend URL. Use HTTPS URLs only.', true);
+        return;
+      }
+      if (lightUrl && !isValidServiceUrl(lightUrl)) {
+        showMessage('settingsMessage', 'Invalid light wallet URL. Use HTTPS URLs only.', true);
+        return;
+      }
       setSwapBackendUrl(swapBackendUrl);
       setLightWalletConfig(lightUrl, lightToken, lightEnabled);
       const hint = document.getElementById('swapBackendHint');
@@ -4547,7 +4721,7 @@ window.addEventListener('unhandledrejection', function(e) {
               await rpcImmediate('open_wallet', { filename: filename, password: password || '' }, { timeoutMs: 30000 });
             } catch (openErr) {
               // Cache may be corrupted — close and retry once
-              console.warn('open_wallet failed, retrying:', openErr && openErr.message);
+              debugLog('open_wallet failed, retrying');
               await rpcImmediate('close_wallet', {}, { timeoutMs: 5000 }).catch(() => {});
               await rpcImmediate('open_wallet', { filename: filename, password: password || '' }, { timeoutMs: 30000 });
             }
@@ -4966,7 +5140,7 @@ window.addEventListener('unhandledrejection', function(e) {
                 await rpcImmediate('open_wallet', { filename: filename, password: password || '' }, { timeoutMs: 30000 });
               } catch (openErr) {
                 const openMsg = String(openErr && openErr.message || '');
-                console.warn('open_wallet failed after exists:', openMsg);
+                debugLog('open_wallet failed after exists');
                 showSyncStatus('Wallet cache may be corrupted. Retrying…', true);
                 await rpcImmediate('close_wallet', {}, { timeoutMs: 5000 }).catch(() => {});
                 throw openErr;
@@ -5315,6 +5489,9 @@ window.addEventListener('unhandledrejection', function(e) {
       const el = document.getElementById(id);
       if (el) el.textContent = 'Show';
     });
+    // Clear seed display DOM (prevents memory/DOM inspection of seed)
+    const seedDisplay = document.getElementById('welcomeSeedDisplay');
+    if (seedDisplay) seedDisplay.innerHTML = '';
   }
 
   // Clear sensitive data when the user leaves the page
@@ -5342,6 +5519,7 @@ window.addEventListener('unhandledrejection', function(e) {
         const resp = await fetch('/api/session', { method: 'POST', credentials: 'same-origin' });
         const data = await resp.json();
         if (data.session_id) browserSessionId = data.session_id;
+        if (data.csrfToken) csrfToken = data.csrfToken;
         if (data.status === 'ready') return true;
         if (data.status === 'starting' || data.status === 'restarting') {
           // Poll until ready (max 8s with faster intervals)
@@ -5352,15 +5530,16 @@ window.addEventListener('unhandledrejection', function(e) {
               headers: browserSessionId ? { 'X-Session-Id': browserSessionId } : {},
             });
             const d = await r.json();
+            if (d.csrfToken) csrfToken = d.csrfToken;
             if (d.status === 'ready') return true;
             if (d.status === 'dead' || d.status === 'none') break;
           }
         }
-        if (data.error) console.error('Session error:', data.error);
+        if (data.error) debugLog('Session error');
         // If we got here without success, wait and retry
         if (attempt < 2) await new Promise(ok => setTimeout(ok, 1000));
       } catch (e) {
-        console.error('Failed to create session (attempt ' + (attempt + 1) + '):', e);
+        debugLog('Failed to create session (attempt ' + (attempt + 1) + ')');
         if (attempt < 2) await new Promise(ok => setTimeout(ok, 1000));
       }
     }

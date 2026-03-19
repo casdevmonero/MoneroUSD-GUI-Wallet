@@ -136,6 +136,25 @@ function hasCredential(wHash) {
   try { return fs.existsSync(credentialPath(wHash)); } catch (_) { return false; }
 }
 
+// Look up credential by seed hash — scans all credential files
+function findCredentialBySeedHash(seedHash) {
+  try {
+    const files = fs.readdirSync(CREDENTIALS_DIR);
+    for (const f of files) {
+      if (!f.endsWith('.json')) continue;
+      try {
+        const data = JSON.parse(fs.readFileSync(path.join(CREDENTIALS_DIR, f), 'utf8'));
+        if (data.seedHash === seedHash) return data;
+      } catch (_) {}
+    }
+  } catch (_) {}
+  return null;
+}
+
+function seedHashFromSeed(seed) {
+  return crypto.createHash('sha256').update(seed.trim().toLowerCase().replace(/\s+/g, ' ')).digest('hex');
+}
+
 // RP ID extraction from request Host header
 function getRpId(req) {
   const host = (req.headers.host || '').split(':')[0].toLowerCase();
@@ -722,6 +741,24 @@ const server = http.createServer(async (req, res) => {
     });
   }
 
+  // POST /api/webauthn/status-by-seed — check if biometric is registered for a seed (before wallet restore)
+  if (req.method === 'POST' && req.url === '/api/webauthn/status-by-seed') {
+    const session = getSession(req);
+    if (!session) return sendJson(res, 401, { error: 'Session required' });
+    try {
+      const body = await readJsonBody(req);
+      const sHash = body.seedHash;
+      if (!sHash || typeof sHash !== 'string') return sendJson(res, 400, { error: 'seedHash required' });
+      const cred = findCredentialBySeedHash(sHash);
+      if (cred) {
+        return sendJson(res, 200, { registered: true, walletHash: cred.walletHash, walletAddress: cred.walletAddress || '' });
+      }
+      return sendJson(res, 200, { registered: false });
+    } catch (e) {
+      return sendJson(res, 500, { error: 'Failed to check seed status' });
+    }
+  }
+
   // GET /api/webauthn/status?address=<walletAddress>
   if (req.method === 'GET' && req.url.startsWith('/api/webauthn/status')) {
     const session = getSession(req);
@@ -740,6 +777,7 @@ const server = http.createServer(async (req, res) => {
     try {
       const body = await readJsonBody(req);
       const address = body.walletAddress;
+      const seedHash = body.seedHash || '';
       if (!address) return sendJson(res, 400, { error: 'walletAddress required' });
       const wHash = walletHash(address);
       if (hasCredential(wHash)) {
@@ -767,6 +805,7 @@ const server = http.createServer(async (req, res) => {
         challenge: options.challenge,
         walletHash: wHash,
         walletAddress: address,
+        seedHash: seedHash,
         expiresAt: Date.now() + 120000,
       };
       return sendJson(res, 200, options);
@@ -809,6 +848,8 @@ const server = http.createServer(async (req, res) => {
         counter: credential.counter,
         transports: ['internal'],
         walletHash: wHash,
+        walletAddress: session._webauthnRegChallenge.walletAddress || '',
+        seedHash: session._webauthnRegChallenge.seedHash || '',
         createdAt: new Date().toISOString(),
       });
       session.walletHash = wHash;

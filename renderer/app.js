@@ -532,6 +532,29 @@ window.addEventListener('unhandledrejection', function(e) {
     return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
   }
 
+  // Hash seed phrase for biometric lookup (before wallet operations)
+  async function hashSeed(seed) {
+    const normalized = seed.trim().toLowerCase().replace(/\s+/g, ' ');
+    const encoded = new TextEncoder().encode(normalized);
+    const hashBuf = await crypto.subtle.digest('SHA-256', encoded);
+    return Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+
+  // Check if biometric is registered for a seed (before wallet restore)
+  async function checkBiometricBySeed(seed) {
+    if (!isBrowser) return { registered: false };
+    try {
+      const sHash = await hashSeed(seed);
+      const res = await fetch('/api/webauthn/status-by-seed', {
+        method: 'POST',
+        headers: getRpcHeaders(),
+        credentials: 'same-origin',
+        body: JSON.stringify({ seedHash: sHash }),
+      });
+      return await res.json();
+    } catch (_) { return { registered: false }; }
+  }
+
   function isWebAuthnAvailable() {
     return !!(window.PublicKeyCredential && navigator.credentials);
   }
@@ -552,13 +575,15 @@ window.addEventListener('unhandledrejection', function(e) {
   let _pendingBioToken = '';
 
   // Register a biometric credential for a wallet
+  // Optional seedHash links the credential to the seed for pre-restore lookup
+  let _pendingSeedHash = '';
   async function webauthnRegister(walletAddress) {
     // Step 1: Get registration options from server
     const optionsRes = await fetch('/api/webauthn/register-options', {
       method: 'POST',
       headers: getRpcHeaders(),
       credentials: 'same-origin',
-      body: JSON.stringify({ walletAddress }),
+      body: JSON.stringify({ walletAddress, seedHash: _pendingSeedHash }),
     });
     if (!optionsRes.ok) {
       const err = await optionsRes.json().catch(() => ({}));
@@ -5190,13 +5215,29 @@ window.addEventListener('unhandledrejection', function(e) {
         return;
       }
 
+      // --- Biometric pre-check by SEED HASH — before any wallet operations ---
+      if (isBrowser && isWebAuthnAvailable()) {
+        showMessage('importMessage', 'Checking biometric…', false);
+        const seedBioStatus = await checkBiometricBySeed(seed);
+        if (seedBioStatus.registered && seedBioStatus.walletAddress) {
+          // This seed has biometric — require Face ID before proceeding
+          currentWalletAddress = seedBioStatus.walletAddress;
+          await notifyServerWalletAddress(seedBioStatus.walletAddress);
+          try {
+            await showBiometricAuthModal(seedBioStatus.walletAddress);
+            showBiometricToast('Biometric verified.');
+          } catch (bioErr) {
+            showMessage('importMessage', 'Biometric verification required for this wallet. Access denied.', true);
+            return;
+          }
+        }
+      }
+
       showMessage('importMessage', 'Importing… (seed is not stored or logged)');
       importInFlight = true;
-      // Cancel any running autoConnect or background sync so they don't compete for wallet RPC
       if (typeof window.__cancelAutoConnect === 'function') window.__cancelAutoConnect();
       cancelBackgroundSync();
       suspendAutoRefresh();
-      // Flush the RPC queue so stale queued calls don't block import
       rpcQueue = Promise.resolve();
       let importWatchdog = null;
       let importWarning = setTimeout(() => {
@@ -5212,36 +5253,6 @@ window.addEventListener('unhandledrejection', function(e) {
 
         // Use a deterministic filename so reimporting the same seed opens the same wallet
         const filename = 'monerousd_main.wallet';
-
-        // --- Biometric pre-check BEFORE restore ---
-        // Try opening the wallet file to get the address. If it exists and has
-        // biometric registered, require Face ID BEFORE the slow restore/scan.
-        let preCheckAddr = '';
-        try {
-          await rpcImmediate('open_wallet', { filename: filename, password: password || '' }, { timeoutMs: 10000 });
-          const addrRes = await rpcImmediate('get_address', { account_index: 0 }, { timeoutMs: 5000 }).catch(() => ({}));
-          preCheckAddr = (addrRes && addrRes.address) || '';
-          await rpcImmediate('close_wallet', {}, { timeoutMs: 5000 }).catch(() => {});
-        } catch (_) {
-          // Wallet doesn't exist yet — that's fine, skip biometric pre-check
-        }
-        if (preCheckAddr) {
-          currentWalletAddress = preCheckAddr;
-          await notifyServerWalletAddress(preCheckAddr);
-          const bioStatus = await checkBiometricStatus(preCheckAddr).catch(() => ({ registered: false }));
-          if (bioStatus.registered) {
-            showMessage('importMessage', '', false);
-            try {
-              await showBiometricAuthModal(preCheckAddr);
-              showBiometricToast('Biometric verified.');
-            } catch (bioErr) {
-              showMessage('importMessage', 'Biometric verification required for this wallet. Access denied.', true);
-              importInFlight = false;
-              resumeAutoRefresh();
-              return;
-            }
-          }
-        }
 
         let restoredFresh = false;
         let result;
@@ -5286,14 +5297,19 @@ window.addEventListener('unhandledrejection', function(e) {
         renderAddressbook();
         setRpcStatus(true);
 
-        // Biometric registration for NEW wallets (no pre-existing credential)
-        if (addr && !preCheckAddr) {
+        // Biometric registration if toggle checked (new wallets without existing credential)
+        if (addr) {
           currentWalletAddress = addr;
           await notifyServerWalletAddress(addr);
-          const importBioToggle = document.getElementById('importBiometricToggle');
-          if (importBioToggle && importBioToggle.checked) {
-            showMessage('importMessage', '', false);
-            await showBiometricRegistrationModal(addr);
+          const bioAlready = await checkBiometricStatus(addr).catch(() => ({ registered: false }));
+          if (!bioAlready.registered) {
+            const importBioToggle = document.getElementById('importBiometricToggle');
+            if (importBioToggle && importBioToggle.checked) {
+              _pendingSeedHash = await hashSeed(seed).catch(() => '');
+              showMessage('importMessage', '', false);
+              await showBiometricRegistrationModal(addr);
+              _pendingSeedHash = '';
+            }
           }
         }
 
@@ -5640,6 +5656,23 @@ window.addEventListener('unhandledrejection', function(e) {
         if (msg) { msg.textContent = 'Seed must be 25 words. You have ' + wordCount + '.'; msg.classList.add('error'); }
         return;
       }
+      // --- Biometric pre-check by SEED HASH — before any wallet operations ---
+      if (isBrowser && isWebAuthnAvailable()) {
+        if (msg) { msg.textContent = 'Checking biometric…'; msg.classList.remove('error'); }
+        const seedBioStatus = await checkBiometricBySeed(seed);
+        if (seedBioStatus.registered && seedBioStatus.walletAddress) {
+          currentWalletAddress = seedBioStatus.walletAddress;
+          await notifyServerWalletAddress(seedBioStatus.walletAddress);
+          try {
+            await showBiometricAuthModal(seedBioStatus.walletAddress);
+            showBiometricToast('Biometric verified.');
+          } catch (bioErr) {
+            if (msg) { msg.textContent = 'Biometric verification required. Access denied.'; msg.classList.add('error'); }
+            return;
+          }
+        }
+      }
+
       if (msg) { msg.textContent = 'Restoring wallet... (making RPC call)'; msg.classList.remove('error'); }
 
       // Direct fetch test before going through RPC wrappers
@@ -5693,13 +5726,9 @@ window.addEventListener('unhandledrejection', function(e) {
         try {
           rpcQueue = Promise.resolve();
           setRpcStatus(true);
-          showSyncStatus(isBrowser ? 'Connected to relay. Restoring wallet from seed…' : 'Restoring wallet from seed…', true);
+          showSyncStatus(isBrowser ? 'Connected to relay. Restoring wallet…' : 'Restoring wallet…', true);
           await rpcImmediate('close_wallet', {}, { timeoutMs: 5000 }).catch(() => {});
 
-          // Restore at the user's actual restore height (or 0 for full scan).
-          // With --max-concurrency 4, scanning ~15K blocks takes only ~4s.
-          // DO NOT restore at daemon tip — refresh(start_height=0) won't rescan
-          // earlier blocks because the wallet's internal restore_height prevents it.
           const actualRestoreHeight = restoreHeight || 0;
 
           try {
@@ -5751,26 +5780,17 @@ window.addEventListener('unhandledrejection', function(e) {
           await configureWalletRpcMoneroStyle().catch(() => {});
           await refreshAddress().catch(() => {});
 
-          // Biometric gate: if wallet already has biometric, REQUIRE scan before access
+          // Biometric registration if toggle checked (offer for wallets without existing credential)
           if (currentWalletAddress) {
             await notifyServerWalletAddress(currentWalletAddress);
-            const bioStatus = await checkBiometricStatus(currentWalletAddress).catch(() => ({ registered: false }));
-            if (bioStatus.registered) {
-              showSyncStatus('', false);
-              try {
-                await showBiometricAuthModal(currentWalletAddress);
-                showBiometricToast('Biometric verified.');
-              } catch (bioErr) {
-                await rpcImmediate('close_wallet', {}, { timeoutMs: 5000 }).catch(() => {});
-                showSyncStatus('Biometric verification required. Access denied.', true);
-                importInFlight = false;
-                return;
-              }
-            } else {
+            const bioAlready = await checkBiometricStatus(currentWalletAddress).catch(() => ({ registered: false }));
+            if (!bioAlready.registered) {
               const restoreBioToggle = document.getElementById('restoreBiometricToggle');
               if (restoreBioToggle && restoreBioToggle.checked) {
+                _pendingSeedHash = await hashSeed(seed).catch(() => '');
                 showSyncStatus('', false);
                 await showBiometricRegistrationModal(currentWalletAddress);
+                _pendingSeedHash = '';
               }
             }
           }

@@ -33,12 +33,13 @@ const ALLOWED_ORIGINS = new Set([
 // ===== Security: RPC method whitelist =====
 const ALLOWED_RPC_METHODS = new Set([
   'create_wallet', 'open_wallet', 'close_wallet', 'get_balance',
-  'get_address', 'get_height', 'refresh', 'transfer', 'get_transfers',
+  'get_address', 'create_address', 'get_height', 'refresh',
+  'transfer', 'get_transfers', 'get_transfer_by_txid',
   'restore_deterministic_wallet', 'query_key', 'store',
-  'get_transfer_by_txid', 'get_version', 'get_accounts',
-  'get_languages', 'get_attribute', 'auto_refresh',
-  'change_wallet_password', 'rescan_blockchain', 'set_daemon',
-  'incoming_transfers',
+  'get_version', 'get_accounts', 'get_languages', 'get_attribute',
+  'auto_refresh', 'change_wallet_password', 'rescan_blockchain',
+  'set_daemon', 'incoming_transfers',
+  'freeze', 'thaw', // Staking: freeze/unfreeze outputs
 ]);
 
 // ===== Security: Per-IP session limits =====

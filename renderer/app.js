@@ -1653,6 +1653,9 @@ window.addEventListener('unhandledrejection', function(e) {
     for (const t of list) {
       const a = String(t.asset_type || t.assetType || '').trim().toLowerCase();
       if (a !== 'usdm') continue;
+      // CRITICAL: Skip spent outputs — they've been used in outgoing transactions
+      // and are no longer part of the wallet's spendable balance.
+      if (t.spent === true) continue;
       const amt = amountAsBigInt(t.amount);
       total += amt;
       if (t.unlocked === true) unlocked += amt;
@@ -1705,15 +1708,10 @@ window.addEventListener('unhandledrejection', function(e) {
           } catch (_) {}
         }
       } else {
-        try {
-          incomingTotals = incomingTotals || await fetchIncomingUsdmTotals({ minAgeMs: 15000 });
-          if (incomingTotals.total > parsed.balance) {
-            const unlocked = incomingTotals.unlocked > 0n ? incomingTotals.unlocked : incomingTotals.total;
-            parsed = { balance: incomingTotals.total, unlocked_balance: unlocked };
-            usedIncomingTotals = true;
-            debugLog('Balance from incoming_transfers (overflow-safe)');
-          }
-        } catch (_) {}
+        // get_balance returned a non-zero result — this is the authoritative balance
+        // from the wallet RPC. Only use incoming_transfers as a sanity check, never
+        // to override upward (that would count spent outputs and inflate the balance).
+        debugLog('get_balance returned non-zero, trusting wallet RPC balance');
       }
       debugLog('get_balance completed, source:', source);
       rpcFailureCount = 0;

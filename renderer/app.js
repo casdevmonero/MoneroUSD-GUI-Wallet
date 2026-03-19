@@ -1794,8 +1794,10 @@ window.addEventListener('unhandledrejection', function(e) {
       const txid = isMint ? (s.minted_tx || '') : (s.burn_tx || s.payout_tx || '');
       // Skip swaps that already appear as a wallet transfer (match by txid)
       if (txid && items.some((it) => it.txid === txid)) return;
-      const isPending = s.status && s.status !== 'minted' && s.status !== 'payout_sent' && s.status !== 'failed';
+      const isPending = s.status && s.status !== 'minted' && s.status !== 'payout_sent' && s.status !== 'failed' && s.status !== 'cancelled';
       const isFailed = s.status === 'failed';
+      const isCancelled = s.status === 'cancelled';
+      const isMinted = s.status === 'minted' || s.status === 'payout_sent';
       const time = s.created_at ? new Date(s.created_at).getTime() : 0;
       // For explorer links: minted TXs are on USDm chain, payout TXs are on BTC/XMR chain
       const txExplorerAsset = isMint ? 'USDm' : (s.asset || 'USDm');
@@ -1809,6 +1811,8 @@ window.addEventListener('unhandledrejection', function(e) {
         time,
         isPending,
         isFailed,
+        isCancelled,
+        isMinted,
         txid,
         txExplorerAsset,
         source: 'swap',
@@ -1828,6 +1832,8 @@ window.addEventListener('unhandledrejection', function(e) {
       let statusHtml = '';
       if (t.isPending) statusHtml = '<span class="recent-status recent-status-pending">Pending</span>';
       else if (t.isFailed) statusHtml = '<span class="recent-status recent-status-failed">Failed</span>';
+      else if (t.isCancelled) statusHtml = '<span class="recent-status recent-status-failed">Cancelled</span>';
+      else if (t.isMinted) statusHtml = '<span class="recent-status recent-status-success">Completed</span>';
 
       const recentTxLink = t.txid
         ? ' ' + txLink(t.txExplorerAsset || 'USDm', t.txid, { label: escHtml(t.txid).slice(0, 10) + '…', cls: 'recent-tx-link' })
@@ -2313,6 +2319,8 @@ window.addEventListener('unhandledrejection', function(e) {
     function persistSwap(record) {
       saveSwapRecord(getSwapWalletKey(), record);
       renderSwapHistory();
+      // Also update the main dashboard Recent Activity box so swap status badges stay current
+      refreshTransfers().catch(() => {});
     }
 
     let _historyRefreshInFlight = false;
@@ -2980,6 +2988,8 @@ window.addEventListener('unhandledrejection', function(e) {
         // Always render and auto-resume after sync, even if no new records from server
         renderSwapHistory();
         autoResumePendingSwaps();
+        // Update Recent Activity on main dashboard so swap badges reflect server truth
+        refreshTransfers().catch(() => {});
       } catch (_) {} // Non-critical — local history still works
     }
     // Expose sync function so code outside bindSwap() scope can trigger it

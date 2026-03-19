@@ -1047,6 +1047,11 @@ body {
   color: var(--monero-error);
 }
 
+.recent-status-success {
+  background: rgba(76, 175, 80, 0.12);
+  color: #4caf50;
+}
+
 .recent-tx-link {
   color: var(--monero-orange);
   text-decoration: none;

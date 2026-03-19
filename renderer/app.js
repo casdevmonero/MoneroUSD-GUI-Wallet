@@ -6204,9 +6204,32 @@ window.addEventListener('unhandledrejection', function(e) {
         await configureWalletRpcMoneroStyle().catch(() => {});
       }
       if (autoConnectCancelled || importInFlight) return;
-      // Sync wallet with blockchain on startup — use generous timeout for chains with many blocks
-      showSyncStatus('Syncing wallet with blockchain…', true);
-      await rpcImmediate('refresh', { start_height: 0 }, { timeoutMs: 120000 }).catch(() => {});
+      // Sync wallet with blockchain on startup — poll get_height instead of
+      // calling refresh (which blocks the single-threaded wallet-rpc for minutes).
+      {
+        const daemonH = await getDaemonHeight() || 1;
+        showSyncStatus('Syncing wallet with blockchain…', true);
+        const maxWaitMs = 600000; // 10 minutes max
+        const pollInterval = 5000;
+        const began = Date.now();
+        let synced = false;
+        while (Date.now() - began < maxWaitMs) {
+          if (autoConnectCancelled || importInFlight) return;
+          try {
+            const hi = await rpcImmediate('get_height', {}, { timeoutMs: 3000 });
+            if (hi && hi.height != null) {
+              const h = Number(hi.height);
+              const pct = daemonH > 0 ? Math.min(100, Math.round((h / daemonH) * 100)) : 0;
+              showSyncStatus('Syncing… block ' + h.toLocaleString() + ' / ' + daemonH.toLocaleString() + ' (' + pct + '%)', true);
+              if (h >= daemonH - 1) { synced = true; break; }
+            }
+          } catch (_) {
+            const elapsed = Math.round((Date.now() - began) / 1000);
+            showSyncStatus('Scanning blockchain… (' + elapsed + 's elapsed, please wait)', true);
+          }
+          await new Promise(ok => setTimeout(ok, pollInterval));
+        }
+      }
       if (autoConnectCancelled || importInFlight) return;
       await refreshAddress().catch(() => {});
       await refreshBalances({ force: true }).catch(() => {});

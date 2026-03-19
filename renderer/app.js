@@ -704,52 +704,56 @@ window.addEventListener('unhandledrejection', function(e) {
     } catch (_) {}
   }
 
+  // Returns a Promise that resolves when registration completes or is skipped.
   function showBiometricRegistrationModal(walletAddress) {
-    const existing = document.getElementById('biometricRegModal');
-    if (existing) existing.remove();
-    const modal = document.createElement('div');
-    modal.id = 'biometricRegModal';
-    modal.className = 'modal-overlay';
-    modal.innerHTML = '<div class="modal-box biometric-modal">'
-      + '<div class="biometric-icon">&#128274;</div>'
-      + '<h3>Link Biometric</h3>'
-      + '<p>Tap the button below to scan your face or fingerprint. This links your biometric to this wallet permanently.</p>'
-      + '<p class="text-muted" style="font-size:.82rem">Once linked, all sends, stakes, swaps, and loans will require your biometric.</p>'
-      + '<div class="biometric-modal-buttons">'
-      + '<button class="btn btn-primary" id="btnBioEnable">Tap to Activate Face ID / Fingerprint</button>'
-      + '<button class="btn btn-ghost" id="btnBioSkip">Skip for now</button>'
-      + '</div>'
-      + '</div>';
-    document.body.appendChild(modal);
+    return new Promise((resolve) => {
+      const existing = document.getElementById('biometricRegModal');
+      if (existing) existing.remove();
+      const modal = document.createElement('div');
+      modal.id = 'biometricRegModal';
+      modal.className = 'modal-overlay';
+      modal.innerHTML = '<div class="modal-box biometric-modal">'
+        + '<div class="biometric-icon">&#128274;</div>'
+        + '<h3>Link Biometric</h3>'
+        + '<p>Tap the button below to scan your face or fingerprint. This links your biometric to this wallet permanently.</p>'
+        + '<p class="text-muted" style="font-size:.82rem">Once linked, all sends, stakes, swaps, and loans will require your biometric.</p>'
+        + '<div class="biometric-modal-buttons">'
+        + '<button class="btn btn-primary" id="btnBioEnable">Tap to Activate Face ID / Fingerprint</button>'
+        + '<button class="btn btn-ghost" id="btnBioSkip">Skip for now</button>'
+        + '</div>'
+        + '</div>';
+      document.body.appendChild(modal);
 
-    document.getElementById('btnBioEnable').addEventListener('click', async () => {
-      const btn = document.getElementById('btnBioEnable');
-      btn.disabled = true;
-      btn.textContent = 'Verifying...';
-      try {
-        await webauthnRegister(walletAddress);
-        modal.remove();
-        // Tell server about the wallet hash
-        await fetch('/api/session/set-wallet', {
-          method: 'POST', headers: getRpcHeaders(), credentials: 'same-origin',
-          body: JSON.stringify({ walletAddress }),
-        }).catch(() => {});
-        showBiometricToast('Biometric enabled! Transactions now require your biometric.');
-      } catch (e) {
-        btn.disabled = false;
-        btn.textContent = 'Enable Biometric';
-        const msg = e.message || '';
-        if (/cancel|abort|not allowed/i.test(msg)) {
-          // User cancelled — just dismiss
+      document.getElementById('btnBioEnable').addEventListener('click', async () => {
+        const btn = document.getElementById('btnBioEnable');
+        btn.disabled = true;
+        btn.textContent = 'Verifying...';
+        try {
+          await webauthnRegister(walletAddress);
           modal.remove();
-        } else {
-          alert('Biometric registration failed: ' + msg);
+          await fetch('/api/session/set-wallet', {
+            method: 'POST', headers: getRpcHeaders(), credentials: 'same-origin',
+            body: JSON.stringify({ walletAddress }),
+          }).catch(() => {});
+          showBiometricToast('Biometric enabled! Transactions now require your biometric.');
+          resolve(true);
+        } catch (e) {
+          btn.disabled = false;
+          btn.textContent = 'Tap to Activate Face ID / Fingerprint';
+          const msg = e.message || '';
+          if (/cancel|abort|not allowed/i.test(msg)) {
+            modal.remove();
+            resolve(false);
+          } else {
+            alert('Biometric registration failed: ' + msg);
+          }
         }
-      }
-    });
+      });
 
-    document.getElementById('btnBioSkip').addEventListener('click', () => {
-      modal.remove();
+      document.getElementById('btnBioSkip').addEventListener('click', () => {
+        modal.remove();
+        resolve(false);
+      });
     });
   }
 
@@ -5103,6 +5107,12 @@ window.addEventListener('unhandledrejection', function(e) {
       });
     }
 
+    // Show biometric toggle if WebAuthn is available
+    if (isBrowser && isWebAuthnAvailable()) {
+      const importBioRow = document.getElementById('importBiometricRow');
+      if (importBioRow) importBioRow.style.display = '';
+    }
+
     document.getElementById('btnImport')?.addEventListener('click', async () => {
       const seedEl = document.getElementById('importSeed');
       const passwordEl = document.getElementById('importPassword');
@@ -5190,6 +5200,16 @@ window.addEventListener('unhandledrejection', function(e) {
         setActiveWalletName(filename);
         renderAddressbook();
         setRpcStatus(true);
+
+        // Biometric registration BEFORE showing wallet — blocks until user scans or skips
+        const importBioToggle = document.getElementById('importBiometricToggle');
+        if (importBioToggle && importBioToggle.checked && addr) {
+          currentWalletAddress = addr;
+          await notifyServerWalletAddress(addr);
+          showMessage('importMessage', '', false);
+          await showBiometricRegistrationModal(addr);
+        }
+
         showMessage('importMessage', 'Wallet restored. Syncing in background…', false);
         const dashboardBtn = document.querySelector('.nav-btn[data-page="dashboard"]');
         if (dashboardBtn) dashboardBtn.click();
@@ -5465,23 +5485,23 @@ window.addEventListener('unhandledrejection', function(e) {
         generatedSeed = '';
         generatedPassword = '';
         createdWalletFilename = '';
-        showMainApp();
-        initMainApp();
-        // Register biometric if toggle was checked during wallet creation
+
+        // Register biometric BEFORE showing wallet — blocks until user scans or skips
         const createBioToggle = document.getElementById('createBiometricToggle');
         if (createBioToggle && createBioToggle.checked) {
-          // Wait for address to be populated by autoConnect, then show modal
-          (async function waitForBioAddress() {
-            for (let i = 0; i < 30; i++) {
-              await new Promise(ok => setTimeout(ok, 500));
-              if (currentWalletAddress) {
-                await notifyServerWalletAddress(currentWalletAddress);
-                showBiometricRegistrationModal(currentWalletAddress);
-                return;
-              }
+          // Get address now before showing main app
+          try {
+            const addrResult = await rpcImmediate('get_address', { account_index: 0 }, { timeoutMs: 10000 });
+            if (addrResult && addrResult.address) {
+              currentWalletAddress = addrResult.address;
+              await notifyServerWalletAddress(currentWalletAddress);
+              await showBiometricRegistrationModal(currentWalletAddress);
             }
-          })();
+          } catch (_) {}
         }
+
+        showMainApp();
+        initMainApp();
       } catch (e) {
         if (msg) { msg.textContent = 'Error: ' + (e.message || 'Failed to finalize wallet'); msg.classList.add('error'); }
       }
@@ -5643,6 +5663,15 @@ window.addEventListener('unhandledrejection', function(e) {
 
           await configureWalletRpcMoneroStyle().catch(() => {});
           await refreshAddress().catch(() => {});
+
+          // Register biometric BEFORE loading balance — blocks until user scans or skips
+          const restoreBioToggle = document.getElementById('restoreBiometricToggle');
+          if (restoreBioToggle && restoreBioToggle.checked && currentWalletAddress) {
+            await notifyServerWalletAddress(currentWalletAddress);
+            showSyncStatus('', false);
+            await showBiometricRegistrationModal(currentWalletAddress);
+          }
+
           startBalanceRefreshInterval();
 
           // The restore creates the wallet but does NOT scan the blockchain.
@@ -5655,16 +5684,6 @@ window.addEventListener('unhandledrejection', function(e) {
           await refreshBalances({ force: true }).catch(() => {});
           await refreshTransfers().catch(() => {});
           showSyncStatus('', false);
-
-          // Register biometric if toggle was checked during restore
-          if (currentWalletAddress) {
-            await notifyServerWalletAddress(currentWalletAddress);
-            const bioToggle = document.getElementById('restoreBiometricToggle');
-            if (bioToggle && bioToggle.checked) {
-              // Must show modal with a tap-button — WebAuthn requires a user gesture
-              setTimeout(() => showBiometricRegistrationModal(currentWalletAddress), 500);
-            }
-          }
         } catch (e) {
           const errMsg = (e.message || 'Unknown');
           const isCacheErr = /bad_alloc|corrupt|archive|portable_binary|Failed to open wallet/i.test(errMsg);

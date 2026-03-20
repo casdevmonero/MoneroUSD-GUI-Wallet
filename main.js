@@ -287,9 +287,16 @@ function runShell(cmd, opts = {}) {
   return new Promise((resolve, reject) => {
     const proc = spawn('/bin/bash', ['-c', cmd], {
       cwd: cwd || os.homedir(),
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, MAKEFLAGS: `-j${os.cpus().length}` },
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: {
+        ...process.env,
+        MAKEFLAGS: `-j${os.cpus().length}`,
+        NONINTERACTIVE: '1',
+        HOMEBREW_NO_AUTO_UPDATE: '1',
+        CI: '1',
+      },
     });
+    proc.stdin.end();
     let stdout = '', stderr = '';
     proc.stdout.on('data', (d) => { stdout += d; });
     proc.stderr.on('data', (d) => { stderr += d; });
@@ -341,7 +348,7 @@ async function buildFromSource(binDir) {
       await runShell('which brew', { timeout: 10000 });
     } catch (_) {
       sendBuildProgress('tools', 'Installing Homebrew...');
-      await runShell('/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"', { timeout: 300000 });
+      await runShell('NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"', { timeout: 300000 });
     }
 
     // Install build dependencies via brew

@@ -199,7 +199,7 @@ setInterval(() => {
 
 /* ── Local Node Management ─────────────────────────────────── */
 let localDaemon = null;   // child_process for USDmd
-let localWalletRpc = null; // child_process for USDm-wallet-rpc
+let localWalletRpc = null; // child_process for USDm-wallet-rpc (local node mode)
 let daemonLog = [];        // last 200 lines of daemon output
 const MAX_LOG_LINES = 200;
 
@@ -990,81 +990,17 @@ function createWindow() {
   mainWindow.on('closed', () => { mainWindow = null; });
 }
 
-const LOCAL_WALLET_RPC_PORT = 27750;
-const REMOTE_DAEMON = 'monerousd.org:17750';
-
-async function autoStartLocalWalletRpc() {
-  if (localWalletRpc && !localWalletRpc.killed) return; // already running
-
-  let binary = findBinary('USDm-wallet-rpc');
-  if (!binary) {
-    const binDir = path.join(getDataDir(), 'bin');
-    if (!fs.existsSync(binDir)) fs.mkdirSync(binDir, { recursive: true });
-    try {
-      binary = await downloadBinary('USDm-wallet-rpc', binDir);
-    } catch (_) {
-      console.log('  Local wallet-rpc binary not available — will use relay');
-      return;
-    }
-  }
-
-  const dataDir = getDataDir();
-  const walletDir = path.join(dataDir, 'wallets');
-  if (!fs.existsSync(walletDir)) fs.mkdirSync(walletDir, { recursive: true });
-
-  const args = [
-    '--daemon-address', REMOTE_DAEMON,
-    '--rpc-bind-port', String(LOCAL_WALLET_RPC_PORT),
-    '--rpc-bind-ip', '127.0.0.1',
-    '--disable-rpc-login',
-    '--wallet-dir', walletDir,
-    '--log-level', '0',
-    '--non-interactive',
-    '--trusted-daemon',
-  ];
-
-  try {
-    localWalletRpc = spawn(binary, args, {
-      cwd: dataDir,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, MONEROUSD_ENABLE_FCMP: '1', MONEROUSD_ALLOW_LOW_MIXIN: '1', MONEROUSD_DISABLE_TX_LIMITS: '1' },
-      detached: false,
-    });
-    localWalletRpc.stdout.on('data', () => {});
-    localWalletRpc.stderr.on('data', () => {});
-    localWalletRpc.on('exit', (code) => {
-      console.log('  Local wallet-rpc exited with code ' + code);
-      localWalletRpc = null;
-    });
-    // Wait for it to become ready
-    for (let i = 0; i < 20; i++) {
-      await new Promise(r => setTimeout(r, 300));
-      try {
-        await daemonRpcLocal(LOCAL_WALLET_RPC_PORT, 'get_version', {});
-        console.log('  Local wallet-rpc started on port ' + LOCAL_WALLET_RPC_PORT);
-        return;
-      } catch (_) {}
-    }
-    console.log('  Local wallet-rpc failed to start');
-  } catch (e) {
-    console.log('  Failed to spawn local wallet-rpc: ' + e.message);
-  }
-}
-
 app.whenReady().then(() => {
   // Set native application menu
   Menu.setApplicationMenu(buildNativeMenu());
   createWindow();
   // Start auto-update checks after a short delay
   setTimeout(initAutoUpdater, 5000);
-  // Auto-start local wallet-rpc for desktop
-  setTimeout(autoStartLocalWalletRpc, 1000);
 });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin' && !isUpdating) app.quit(); });
 app.on('activate', () => { if (mainWindow === null) createWindow(); });
 
 ipcMain.handle('get-app-version', () => app.getVersion());
-ipcMain.handle('local-wallet-rpc-running', () => !!(localWalletRpc && !localWalletRpc.killed));
 
 // Proxy wallet RPC from main process so renderer (file://) can reach local RPC without CORS.
 // Retry on ECONNRESET / connection errors (local nodes only; wallet RPC can drop under load).

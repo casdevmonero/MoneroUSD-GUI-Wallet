@@ -1650,3 +1650,4 @@ function startMempoolMiner() {
   setInterval(checkMempoolAndMine, MINE_POLL_MS);
   console.log('  Auto-mine: polling mempool every ' + (MINE_POLL_MS / 1000) + 's');
 }
+

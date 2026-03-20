@@ -846,6 +846,8 @@ body {
 
 .form-message.error {
   color: var(--monero-error);
+  white-space: pre-line;
+  text-align: left;
 }
 
 .form-message.success {

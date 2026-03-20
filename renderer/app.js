@@ -2462,7 +2462,13 @@ window.addEventListener('unhandledrejection', function(e) {
   function showMessage(id, text, isError) {
     const el = document.getElementById(id);
     if (!el) return;
-    el.textContent = text;
+    // Use innerHTML with escaped text to support newlines in error messages
+    if (text && text.includes('\n')) {
+      const escaped = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      el.innerHTML = escaped.replace(/\n/g, '<br>');
+    } else {
+      el.textContent = text;
+    }
     el.classList.toggle('error', isError);
     el.classList.toggle('success', !isError && text);
   }

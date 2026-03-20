@@ -340,39 +340,50 @@ async function buildFromSource(binDir) {
 
   if (process.platform === 'darwin') {
     // Check for Xcode command line tools
+    let hasXcode = false;
     try {
       await runShell('xcode-select -p', { timeout: 10000 });
+      hasXcode = true;
     } catch (_) {
-      sendBuildProgress('tools', 'Installing Xcode command line tools...');
+      // Try to trigger the system install dialog (doesn't need sudo)
       try {
-        // This opens a system dialog for the user to accept
         await runShell('xcode-select --install', { timeout: 10000 });
-        throw new Error('Xcode command line tools are being installed. Please wait for the installation to finish, then click Create Node again.');
-      } catch (e) {
-        if (/already installed/i.test(e.message)) {
-          // Already installed, continue
-        } else {
-          throw e;
-        }
-      }
+      } catch (_) {}
+      throw new Error(
+        'Xcode command line tools are required. A system dialog should appear to install them. ' +
+        'After installation completes, click "Create Node" again.\n\n' +
+        'If no dialog appeared, open Terminal and run:  xcode-select --install'
+      );
     }
 
-    // Check for Homebrew
+    // Check for Homebrew — do NOT try to install it automatically (needs sudo)
+    let brewPath = '';
     try {
-      await runShell('which brew', { timeout: 10000 });
-    } catch (_) {
-      sendBuildProgress('tools', 'Installing Homebrew...');
-      await runShell('NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"', { timeout: 300000 });
+      brewPath = await runShell('which brew || [ -x /opt/homebrew/bin/brew ] && echo /opt/homebrew/bin/brew || [ -x /usr/local/bin/brew ] && echo /usr/local/bin/brew', { timeout: 10000 });
+    } catch (_) {}
+
+    if (!brewPath || !brewPath.trim()) {
+      throw new Error(
+        'Homebrew is required to install build dependencies but is not installed.\n\n' +
+        'To install Homebrew, open Terminal and run:\n' +
+        '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"\n\n' +
+        'Then click "Create Node" again.'
+      );
     }
+
+    // Ensure brew is in PATH for subsequent commands
+    const brewBin = brewPath.trim();
+    const brewDir = path.dirname(brewBin);
 
     // Install build dependencies via brew
     sendBuildProgress('deps', 'Installing build dependencies (cmake, boost, openssl)...');
     try {
-      await runShell('brew install cmake boost openssl pkg-config', { timeout: 600000 });
+      await runShell(`export PATH="${brewDir}:$PATH" && brew install cmake boost openssl pkg-config`, { timeout: 600000 });
     } catch (e) {
+      const em = e.message || '';
       // If already installed, brew returns non-zero but that's ok
-      if (!/already installed/i.test(e.message) && !/nothing to install/i.test(e.message)) {
-        throw new Error('Failed to install dependencies: ' + e.message);
+      if (!/already installed/i.test(em) && !/nothing to install/i.test(em)) {
+        throw new Error('Failed to install dependencies via Homebrew: ' + em);
       }
     }
   } else {
@@ -384,7 +395,12 @@ async function buildFromSource(binDir) {
       try {
         await runShell('sudo apt-get update && sudo apt-get install -y build-essential cmake pkg-config libboost-all-dev libssl-dev libunbound-dev libsodium-dev', { timeout: 600000 });
       } catch (e) {
-        throw new Error('Failed to install build dependencies. Please install cmake, boost, and openssl manually.');
+        throw new Error(
+          'Build tools not found and automatic install failed.\n\n' +
+          'Please open Terminal and run:\n' +
+          'sudo apt-get install -y build-essential cmake pkg-config libboost-all-dev libssl-dev libunbound-dev libsodium-dev\n\n' +
+          'Then click "Create Node" again.'
+        );
       }
     }
   }
@@ -691,15 +707,17 @@ ipcMain.handle('local-node-setup', async (event, { seedNodes = [] } = {}) => {
       daemonPath = await downloadBinary('USDmd', binDir);
       steps.push('Downloaded USDmd to ' + daemonPath);
     } catch (dlErr) {
-      // Download failed — build from source automatically
-      steps.push('Download unavailable, building from source...');
+      // Download failed — try building from source
+      steps.push('Pre-built binary not available for your platform, building from source...');
+      sendBuildProgress('binaries', 'Pre-built binary not available, will build from source...');
       try {
         daemonPath = await buildFromSource(binDir);
         steps.push('Built USDmd from source: ' + daemonPath);
       } catch (buildErr) {
+        const msg = buildErr.message || '';
         return {
           ok: false,
-          error: 'Could not build USDmd: ' + buildErr.message,
+          error: msg,
           steps,
         };
       }

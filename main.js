@@ -1203,3 +1203,41 @@ ipcMain.handle('init-remote-session', async (event, { url }) => {
     return { status: 'error', error: e.message };
   }
 });
+
+// IPC: Generic relay API fetch — routes non-RPC calls (like /delete_wallet_cache)
+// through the same session (remoteCookies) that wallet-rpc uses.
+ipcMain.handle('relay-fetch', async (event, { baseUrl, path, method, body }) => {
+  return new Promise((resolve, reject) => {
+    const u = new URL(baseUrl);
+    const isHttps = u.protocol === 'https:';
+    const payload = body ? JSON.stringify(body) : '';
+    const headers = { 'Content-Type': 'application/json' };
+    if (payload) headers['Content-Length'] = Buffer.byteLength(payload);
+    const cookie = remoteCookies.get(u.hostname);
+    if (cookie) headers['Cookie'] = cookie;
+    const opts = {
+      hostname: u.hostname,
+      port: u.port || (isHttps ? 443 : 80),
+      path: path,
+      method: method || 'POST',
+      headers,
+    };
+    const req = (isHttps ? https : http).request(opts, (res) => {
+      if (res.headers['set-cookie']) {
+        for (const sc of res.headers['set-cookie']) {
+          const match = sc.match(/musd_session=([^;]+)/);
+          if (match && match[1]) remoteCookies.set(u.hostname, 'musd_session=' + match[1]);
+        }
+      }
+      let buf = '';
+      res.on('data', c => buf += c);
+      res.on('end', () => {
+        try { resolve(JSON.parse(buf || '{}')); } catch (_) { resolve({ raw: buf }); }
+      });
+    });
+    req.on('error', e => reject(e));
+    req.setTimeout(15000, () => { req.destroy(); reject(new Error('Relay fetch timeout')); });
+    if (payload) req.write(payload);
+    req.end();
+  });
+});

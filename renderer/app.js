@@ -5403,12 +5403,16 @@ window.addEventListener('unhandledrejection', function(e) {
               // Delete the .wallet cache file via server so re-restore scans from block 0.
               // The .wallet.keys file is preserved (contains the keys from the seed).
               try {
-                await fetch(getFetchUrl() + '/delete_wallet_cache', {
-                  method: 'POST',
-                  headers: getRpcHeaders(),
-                  credentials: 'same-origin',
-                  body: JSON.stringify({ filename: filename }),
-                });
+                if (window.electronAPI && window.electronAPI.relayFetch) {
+                  await window.electronAPI.relayFetch(getRpcUrl(), '/delete_wallet_cache', 'POST', { filename: filename });
+                } else {
+                  await fetch(getFetchUrl() + '/delete_wallet_cache', {
+                    method: 'POST',
+                    headers: getRpcHeaders(),
+                    credentials: 'same-origin',
+                    body: JSON.stringify({ filename: filename }),
+                  });
+                }
               } catch (_) {}
               result = await rpcImmediate('restore_deterministic_wallet', {
                 seed: seed,
@@ -5604,6 +5608,9 @@ window.addEventListener('unhandledrejection', function(e) {
   let keepaliveTimerId = null;
   function startKeepalive() {
     if (keepaliveTimerId) return;
+    // Desktop mode: main.js keeps the relay session alive via RPC calls.
+    // Relative fetch('/api/...') would hit file:// in Electron, so skip.
+    if (!isBrowser) return;
     keepaliveTimerId = setInterval(() => {
       fetch('/api/session/keepalive', { method: 'POST', credentials: 'same-origin' })
         .then(r => r.json())
@@ -5627,8 +5634,8 @@ window.addEventListener('unhandledrejection', function(e) {
   // On visibility change: immediate keepalive + balance refresh when coming back
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') {
-      // Immediate keepalive ping on tab focus
-      fetch('/api/session/keepalive', { method: 'POST', credentials: 'same-origin' }).catch(() => {});
+      // Immediate keepalive ping on tab focus (browser mode only)
+      if (isBrowser) fetch('/api/session/keepalive', { method: 'POST', credentials: 'same-origin' }).catch(() => {});
     }
   });
 
@@ -5984,12 +5991,16 @@ window.addEventListener('unhandledrejection', function(e) {
               try {
                 await rpcImmediate('close_wallet', {}, { timeoutMs: 5000 }).catch(() => {});
                 try {
-                  await fetch(getFetchUrl() + '/delete_wallet_cache', {
-                    method: 'POST',
-                    headers: getRpcHeaders(),
-                    credentials: 'same-origin',
-                    body: JSON.stringify({ filename: filename }),
-                  });
+                  if (window.electronAPI && window.electronAPI.relayFetch) {
+                    await window.electronAPI.relayFetch(getRpcUrl(), '/delete_wallet_cache', 'POST', { filename: filename });
+                  } else {
+                    await fetch(getFetchUrl() + '/delete_wallet_cache', {
+                      method: 'POST',
+                      headers: getRpcHeaders(),
+                      credentials: 'same-origin',
+                      body: JSON.stringify({ filename: filename }),
+                    });
+                  }
                 } catch (_) {}
                 await rpcNoRetry('restore_deterministic_wallet', {
                   seed: seed,
@@ -6539,12 +6550,10 @@ window.addEventListener('unhandledrejection', function(e) {
       return;
     }
 
-    // Desktop (Electron): initialize relay session so RPC calls have a persistent session.
-    // Without this, each fetch to monerousd.org creates a new session (SameSite=Strict cookies
-    // aren't sent cross-origin from Electron), so wallet state is lost between calls.
-    initBrowserSession().then((ok) => {
-      debugLog('Desktop relay session: ' + (ok ? 'ready' : 'failed') + ', sessionId: ' + (browserSessionId ? browserSessionId.slice(0,8) + '…' : 'none'));
-    }).catch(() => {});
+    // Desktop (Electron): main.js manages the relay session via remoteCookies.
+    // Do NOT call initBrowserSession() here — it would create a second, wasted
+    // session (Session A) that diverges from the one main.js uses (Session B).
+    // All RPC calls go through window.electronAPI.invokeRpc → main.js → relay.
 
     // Desktop (Electron): auto-open last wallet if previously onboarded
     if (isOnboarded()) {

@@ -7,6 +7,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Remote relay session
   initRemoteSession: (url) => ipcRenderer.invoke('init-remote-session', { url }),
+  relayFetch: (baseUrl, path, method, body) =>
+    ipcRenderer.invoke('relay-fetch', { baseUrl, path, method, body }),
 
   // Local node management
   localNodeStart: (opts) => ipcRenderer.invoke('local-node-start', opts),

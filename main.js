@@ -49,24 +49,8 @@ function initAutoUpdater() {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('update-downloaded', { version: info.version });
     }
-    // Auto-restart after a short delay to let the user see the notification
-    setTimeout(() => {
-      isUpdating = true;
-      // Kill child processes immediately so before-quit doesn't block
-      if (localWalletRpc && !localWalletRpc.killed) { try { localWalletRpc.kill('SIGKILL'); } catch(_){} }
-      if (localDaemon && !localDaemon.killed) { try { localDaemon.kill('SIGKILL'); } catch(_){} }
-      localWalletRpc = null;
-      localDaemon = null;
-      console.log('[update] Calling quitAndInstall...');
-      try {
-        // isSilent=true (no installer UI on Windows), isForceRunAfter=true (restart app after install)
-        autoUpdater.quitAndInstall(true, true);
-      } catch (e) {
-        console.error('[update] quitAndInstall failed:', e);
-        // Fallback: force quit and let autoInstallOnAppQuit handle it on next launch
-        app.quit();
-      }
-    }, 8000);
+    // Do NOT auto-restart — let the user click "Restart Now".
+    // On macOS, quitAndInstall often fails silently, so user-initiated is more reliable.
   });
 
   autoUpdater.on('error', (err) => {
@@ -102,11 +86,14 @@ ipcMain.handle('update-install', () => {
   localWalletRpc = null;
   localDaemon = null;
   console.log('[update] Manual quitAndInstall triggered');
+  // On macOS, quitAndInstall(false, true) works more reliably — isSilent=false shows
+  // the Squirrel update dialog which ensures the app actually restarts.
   try {
-    autoUpdater.quitAndInstall(true, true);
+    autoUpdater.quitAndInstall(false, true);
   } catch (e) {
-    console.error('[update] quitAndInstall failed:', e);
-    app.quit();
+    console.error('[update] quitAndInstall failed, forcing quit:', e);
+    // Fallback: just quit. autoInstallOnAppQuit=true will install on next launch.
+    app.exit(0);
   }
 });
 

@@ -6350,29 +6350,29 @@ window.addEventListener('unhandledrejection', function(e) {
       progressWrap.classList.add('hidden');
       btnDismiss.classList.add('hidden');
       btnAction.disabled = false;
-      btnAction.textContent = 'Restart Now';
-      btnAction.onclick = () => window.electronAPI.updateInstall();
-      // App will auto-restart in 8 seconds; show a persistent countdown
-      let countdown = 8;
-      bannerText.textContent = `Update v${data.version} ready — restarting in ${countdown}s`;
+      btnAction.textContent = 'Restart to Update';
+      btnAction.onclick = () => {
+        btnAction.disabled = true;
+        btnAction.textContent = 'Restarting...';
+        bannerText.textContent = `Installing update v${data.version}...`;
+        window.electronAPI.updateInstall();
+        // If quitAndInstall fails (common on macOS), show fallback after 5s
+        setTimeout(() => {
+          btnAction.disabled = false;
+          btnAction.textContent = 'Quit & Update';
+          bannerText.textContent = `Update v${data.version} ready. Quit the app manually and reopen to install.`;
+          btnAction.onclick = () => window.electronAPI.updateInstall();
+        }, 5000);
+      };
+      bannerText.textContent = `Update v${data.version} downloaded. Click to restart.`;
       banner.classList.remove('hidden');
-      // Make banner impossible to miss
+      // Make banner persistent and visible
       banner.style.background = '#FF6600';
       banner.style.position = 'fixed';
       banner.style.top = '0';
       banner.style.left = '0';
       banner.style.right = '0';
       banner.style.zIndex = '99999';
-      const timer = setInterval(() => {
-        countdown--;
-        if (countdown <= 0) {
-          clearInterval(timer);
-          bannerText.textContent = `Installing update v${data.version}... restarting now`;
-          btnAction.disabled = true;
-        } else {
-          bannerText.textContent = `Update v${data.version} ready — restarting in ${countdown}s`;
-        }
-      }, 1000);
     });
 
     window.electronAPI.onUpdateStatus((data) => {

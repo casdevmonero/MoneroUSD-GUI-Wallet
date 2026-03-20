@@ -756,10 +756,12 @@ window.addEventListener('unhandledrejection', function(e) {
         try {
           await webauthnRegister(walletAddress);
           modal.remove();
-          await fetch('/api/session/set-wallet', {
-            method: 'POST', headers: getRpcHeaders(), credentials: 'same-origin',
-            body: JSON.stringify({ walletAddress }),
-          }).catch(() => {});
+          if (isBrowser) {
+            await fetch('/api/session/set-wallet', {
+              method: 'POST', headers: getRpcHeaders(), credentials: 'same-origin',
+              body: JSON.stringify({ walletAddress }),
+            }).catch(() => {});
+          }
           showBiometricToast('Biometric enabled! Transactions now require your biometric.');
           resolve(true);
         } catch (e) {

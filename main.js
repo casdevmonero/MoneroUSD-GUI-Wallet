@@ -79,21 +79,116 @@ ipcMain.handle('update-download', async () => {
   }
 });
 
-ipcMain.handle('update-install', () => {
+ipcMain.handle('update-install', async () => {
+  console.log('[update] Manual update-install triggered');
   isUpdating = true;
   if (localWalletRpc && !localWalletRpc.killed) { try { localWalletRpc.kill('SIGKILL'); } catch(_){} }
   if (localDaemon && !localDaemon.killed) { try { localDaemon.kill('SIGKILL'); } catch(_){} }
   localWalletRpc = null;
   localDaemon = null;
-  console.log('[update] Manual quitAndInstall triggered');
-  // On macOS, quitAndInstall(false, true) works more reliably — isSilent=false shows
-  // the Squirrel update dialog which ensures the app actually restarts.
-  try {
-    autoUpdater.quitAndInstall(false, true);
-  } catch (e) {
-    console.error('[update] quitAndInstall failed, forcing quit:', e);
-    // Fallback: just quit. autoInstallOnAppQuit=true will install on next launch.
-    app.exit(0);
+
+  if (process.platform === 'darwin') {
+    // macOS: Squirrel quitAndInstall is unreliable for unsigned apps.
+    // Manual approach: find the cached update zip, extract, replace app, relaunch.
+    try {
+      const appPath = app.getAppPath(); // e.g. /Applications/Monero USD Wallet.app/Contents/Resources/app.asar
+      const appBundle = path.resolve(appPath, '..', '..', '..'); // .app bundle root
+      const appDir = path.dirname(appBundle); // e.g. /Applications/
+      const appName = path.basename(appBundle); // e.g. Monero USD Wallet.app
+
+      // Find the downloaded update zip in electron-updater's cache
+      const cacheDir = path.join(app.getPath('userData'), '..', 'monerousd-desktop-updater');
+      console.log('[update] Looking for cached update in:', cacheDir);
+
+      let zipPath = null;
+      if (fs.existsSync(cacheDir)) {
+        const files = fs.readdirSync(cacheDir).filter(f => f.endsWith('.zip'));
+        if (files.length > 0) {
+          // Use the most recently modified zip
+          files.sort((a, b) => {
+            const sa = fs.statSync(path.join(cacheDir, a));
+            const sb = fs.statSync(path.join(cacheDir, b));
+            return sb.mtimeMs - sa.mtimeMs;
+          });
+          zipPath = path.join(cacheDir, files[0]);
+        }
+      }
+
+      if (!zipPath || !fs.existsSync(zipPath)) {
+        console.error('[update] No cached update zip found, falling back to quitAndInstall');
+        autoUpdater.quitAndInstall(false, true);
+        return;
+      }
+
+      console.log('[update] Found update zip:', zipPath);
+      console.log('[update] App bundle:', appBundle);
+      console.log('[update] App dir:', appDir);
+
+      // Extract zip to temp dir
+      const tmpDir = path.join(os.tmpdir(), 'monerousd-update-' + Date.now());
+      fs.mkdirSync(tmpDir, { recursive: true });
+
+      const { execSync } = require('child_process');
+      execSync(`unzip -o -q "${zipPath}" -d "${tmpDir}"`, { timeout: 60000 });
+
+      // Find the .app inside the extracted zip
+      const extracted = fs.readdirSync(tmpDir);
+      const newApp = extracted.find(f => f.endsWith('.app'));
+      if (!newApp) {
+        throw new Error('No .app found in update zip. Contents: ' + extracted.join(', '));
+      }
+
+      const newAppPath = path.join(tmpDir, newApp);
+      const backupPath = appBundle + '.backup';
+
+      // Create a shell script that:
+      // 1. Waits for the app to quit
+      // 2. Replaces the old app with the new one
+      // 3. Relaunches the app
+      // 4. Cleans up
+      const script = `#!/bin/bash
+sleep 2
+# Remove old backup if exists
+rm -rf "${backupPath}"
+# Move current app to backup
+mv "${appBundle}" "${backupPath}" 2>/dev/null
+# Move new app into place
+mv "${newAppPath}" "${path.join(appDir, appName)}"
+# Fix permissions
+chmod -R 755 "${path.join(appDir, appName)}"
+# Remove quarantine flag
+xattr -dr com.apple.quarantine "${path.join(appDir, appName)}" 2>/dev/null
+# Relaunch
+open "${path.join(appDir, appName)}"
+# Cleanup
+rm -rf "${backupPath}"
+rm -rf "${tmpDir}"
+`;
+      const scriptPath = path.join(tmpDir, 'update.sh');
+      fs.writeFileSync(scriptPath, script, { mode: 0o755 });
+
+      console.log('[update] Running update script and quitting...');
+      spawn('/bin/bash', [scriptPath], {
+        detached: true,
+        stdio: 'ignore',
+      }).unref();
+
+      // Quit the app — the script will replace it and relaunch
+      setTimeout(() => app.exit(0), 500);
+
+    } catch (e) {
+      console.error('[update] Manual update failed:', e);
+      // Last resort fallback
+      try { autoUpdater.quitAndInstall(false, true); } catch (_) { app.exit(0); }
+    }
+  } else {
+    // Windows/Linux: Squirrel works fine
+    try {
+      autoUpdater.quitAndInstall(true, true);
+    } catch (e) {
+      console.error('[update] quitAndInstall failed:', e);
+      app.exit(0);
+    }
   }
 });
 

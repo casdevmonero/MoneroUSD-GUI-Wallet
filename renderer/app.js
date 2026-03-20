@@ -1436,6 +1436,12 @@ window.addEventListener('unhandledrejection', function(e) {
   async function rpcNoRetry(method, params = {}, options = {}) {
     const timeoutMs = options.timeoutMs || 120000;
     const rpcUrl = getRpcUrl();
+    // Use Electron IPC when available — same path as rpcImmediate/rpc.
+    // Without this, rpcNoRetry sends via fetch (Session A) while rpcImmediate
+    // sends via invokeRpc (Session B), causing wallet ops to land on different sessions.
+    if (typeof window !== 'undefined' && window.electronAPI && typeof window.electronAPI.invokeRpc === 'function') {
+      return await window.electronAPI.invokeRpc(rpcUrl, method, params, timeoutMs);
+    }
     const url = getFetchUrl();
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);

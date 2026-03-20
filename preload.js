@@ -30,4 +30,5 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Events from main process
   onLocalNodeStopped: (cb) => ipcRenderer.on('local-node-stopped', (_, data) => cb(data)),
   onLocalWalletRpcStopped: (cb) => ipcRenderer.on('local-wallet-rpc-stopped', (_, data) => cb(data)),
+  onBuildProgress: (cb) => ipcRenderer.on('build-progress', (_, data) => cb(data)),
 });

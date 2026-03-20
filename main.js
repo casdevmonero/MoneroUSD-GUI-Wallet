@@ -197,6 +197,164 @@ async function downloadBinary(name, destDir) {
   });
 }
 
+// Build daemon from source (macOS / Linux)
+const SOURCE_REPO = 'https://github.com/haven-protocol-org/haven-main.git';
+
+function runShell(cmd, opts = {}) {
+  const { cwd, timeout = 600000 } = opts;
+  return new Promise((resolve, reject) => {
+    const proc = spawn('/bin/bash', ['-c', cmd], {
+      cwd: cwd || os.homedir(),
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, MAKEFLAGS: `-j${os.cpus().length}` },
+    });
+    let stdout = '', stderr = '';
+    proc.stdout.on('data', (d) => { stdout += d; });
+    proc.stderr.on('data', (d) => { stderr += d; });
+    const timer = setTimeout(() => { proc.kill('SIGKILL'); reject(new Error('Build timed out')); }, timeout);
+    proc.on('exit', (code) => {
+      clearTimeout(timer);
+      if (code === 0) resolve(stdout.trim());
+      else reject(new Error(`Exit ${code}: ${stderr.slice(-500)}`));
+    });
+    proc.on('error', (e) => { clearTimeout(timer); reject(e); });
+  });
+}
+
+function sendBuildProgress(step, message) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('build-progress', { step, message });
+  }
+}
+
+async function buildFromSource(binDir) {
+  const dataDir = getDataDir();
+  const srcDir = path.join(dataDir, 'haven-main');
+  const cpus = os.cpus().length;
+
+  // Step 1: Check for build tools
+  sendBuildProgress('tools', 'Checking build tools...');
+
+  if (process.platform === 'darwin') {
+    // Check for Xcode command line tools
+    try {
+      await runShell('xcode-select -p', { timeout: 10000 });
+    } catch (_) {
+      sendBuildProgress('tools', 'Installing Xcode command line tools...');
+      try {
+        // This opens a system dialog for the user to accept
+        await runShell('xcode-select --install', { timeout: 10000 });
+        throw new Error('Xcode command line tools are being installed. Please wait for the installation to finish, then click Create Node again.');
+      } catch (e) {
+        if (/already installed/i.test(e.message)) {
+          // Already installed, continue
+        } else {
+          throw e;
+        }
+      }
+    }
+
+    // Check for Homebrew
+    try {
+      await runShell('which brew', { timeout: 10000 });
+    } catch (_) {
+      sendBuildProgress('tools', 'Installing Homebrew...');
+      await runShell('/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"', { timeout: 300000 });
+    }
+
+    // Install build dependencies via brew
+    sendBuildProgress('deps', 'Installing build dependencies (cmake, boost, openssl)...');
+    try {
+      await runShell('brew install cmake boost openssl pkg-config', { timeout: 600000 });
+    } catch (e) {
+      // If already installed, brew returns non-zero but that's ok
+      if (!/already installed/i.test(e.message) && !/nothing to install/i.test(e.message)) {
+        throw new Error('Failed to install dependencies: ' + e.message);
+      }
+    }
+  } else {
+    // Linux
+    sendBuildProgress('deps', 'Installing build dependencies...');
+    try {
+      await runShell('which cmake && which make && which g++', { timeout: 10000 });
+    } catch (_) {
+      try {
+        await runShell('sudo apt-get update && sudo apt-get install -y build-essential cmake pkg-config libboost-all-dev libssl-dev libunbound-dev libsodium-dev', { timeout: 600000 });
+      } catch (e) {
+        throw new Error('Failed to install build dependencies. Please install cmake, boost, and openssl manually.');
+      }
+    }
+  }
+  sendBuildProgress('deps', 'Build dependencies ready');
+
+  // Step 2: Clone or update source
+  if (fs.existsSync(path.join(srcDir, 'Makefile'))) {
+    sendBuildProgress('source', 'Source code found, updating...');
+    try {
+      await runShell('git pull --rebase', { cwd: srcDir, timeout: 120000 });
+    } catch (_) {
+      // If pull fails, that's OK — we'll build what we have
+    }
+  } else {
+    sendBuildProgress('source', 'Downloading MoneroUSD source code...');
+    // Remove partial clone if exists
+    if (fs.existsSync(srcDir)) {
+      await runShell(`rm -rf "${srcDir}"`, { timeout: 30000 });
+    }
+    await runShell(`git clone --recursive --depth 1 ${SOURCE_REPO} "${srcDir}"`, { timeout: 600000 });
+  }
+  sendBuildProgress('source', 'Source code ready');
+
+  // Step 3: Build
+  sendBuildProgress('build', `Compiling MoneroUSD (using ${cpus} cores)... This may take 10-30 minutes.`);
+  const buildDir = path.join(srcDir, 'build', 'release');
+  if (!fs.existsSync(buildDir)) fs.mkdirSync(buildDir, { recursive: true });
+
+  // cmake
+  sendBuildProgress('build', 'Running cmake...');
+  await runShell(`cd "${buildDir}" && cmake -D CMAKE_BUILD_TYPE=Release ../..`, { cwd: srcDir, timeout: 120000 });
+
+  // make
+  sendBuildProgress('build', `Building (${cpus} parallel jobs)... This takes a while.`);
+  await runShell(`cd "${buildDir}" && make -j${cpus}`, { cwd: srcDir, timeout: 3600000 }); // 1 hour max
+
+  sendBuildProgress('build', 'Build complete!');
+
+  // Step 4: Copy binaries to bin dir
+  sendBuildProgress('install', 'Installing binaries...');
+  if (!fs.existsSync(binDir)) fs.mkdirSync(binDir, { recursive: true });
+
+  const builtBinDir = path.join(buildDir, 'bin');
+  const binaries = ['USDmd', 'USDm-wallet-rpc'];
+  // Also check for haven-named binaries as fallback
+  const fallbackNames = { 'USDmd': 'havend', 'USDm-wallet-rpc': 'haven-wallet-rpc' };
+  const installed = {};
+
+  for (const name of binaries) {
+    let src = path.join(builtBinDir, name);
+    if (!fs.existsSync(src)) {
+      src = path.join(builtBinDir, fallbackNames[name] || name);
+    }
+    if (fs.existsSync(src)) {
+      const dest = path.join(binDir, name);
+      fs.copyFileSync(src, dest);
+      fs.chmodSync(dest, 0o755);
+      installed[name] = dest;
+      sendBuildProgress('install', `Installed ${name}`);
+    }
+  }
+
+  if (!installed['USDmd']) {
+    // List what was actually built
+    let builtFiles = [];
+    try { builtFiles = fs.readdirSync(builtBinDir); } catch (_) {}
+    throw new Error('Build completed but USDmd binary not found. Built files: ' + builtFiles.join(', '));
+  }
+
+  sendBuildProgress('install', 'All binaries installed!');
+  return installed['USDmd'];
+}
+
 function getDataDir() {
   const base = process.env.MONEROUSD_DATA_DIR || path.join(os.homedir(), '.monerousd');
   if (!fs.existsSync(base)) fs.mkdirSync(base, { recursive: true });
@@ -430,11 +588,18 @@ ipcMain.handle('local-node-setup', async (event, { seedNodes = [] } = {}) => {
       daemonPath = await downloadBinary('USDmd', binDir);
       steps.push('Downloaded USDmd to ' + daemonPath);
     } catch (dlErr) {
-      return {
-        ok: false,
-        error: 'Could not download USDmd: ' + dlErr.message + '. You can manually place the binary in ~/.monerousd/bin/',
-        steps,
-      };
+      // Download failed — build from source automatically
+      steps.push('Download unavailable, building from source...');
+      try {
+        daemonPath = await buildFromSource(binDir);
+        steps.push('Built USDmd from source: ' + daemonPath);
+      } catch (buildErr) {
+        return {
+          ok: false,
+          error: 'Could not build USDmd: ' + buildErr.message,
+          steps,
+        };
+      }
     }
   } else {
     steps.push('Found USDmd at ' + daemonPath);

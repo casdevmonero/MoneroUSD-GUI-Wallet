@@ -4725,6 +4725,31 @@ window.addEventListener('unhandledrejection', function(e) {
       }
     }
 
+    // Build step IDs that correspond to build-progress events from main process
+    const buildStepIds = ['stepTools', 'stepDeps', 'stepSource', 'stepBuild', 'stepInstall'];
+
+    // Listen for build progress events from main process (build from source)
+    if (isElectron && window.electronAPI.onBuildProgress) {
+      window.electronAPI.onBuildProgress((data) => {
+        const stepId = 'step' + data.step.charAt(0).toUpperCase() + data.step.slice(1);
+        // Show all build steps when building starts
+        for (const id of buildStepIds) {
+          const el = document.getElementById(id);
+          if (el) el.classList.remove('hidden');
+        }
+        // Update the specific step
+        markStep(stepId, 'active', data.message);
+        // Mark previous build steps as done
+        const idx = buildStepIds.indexOf(stepId);
+        for (let i = 0; i < idx; i++) {
+          const prev = document.getElementById(buildStepIds[i]);
+          if (prev && !prev.className.includes('done') && !prev.className.includes('error')) {
+            markStep(buildStepIds[i], 'done');
+          }
+        }
+      });
+    }
+
     // One-click Create Node button
     btnCreate.addEventListener('click', async () => {
       btnCreate.disabled = true;
@@ -4732,6 +4757,11 @@ window.addEventListener('unhandledrejection', function(e) {
       showMessage('nodeMessage', '', false);
       if (setupBox) setupBox.classList.add('hidden');
       if (setupSteps) setupSteps.classList.remove('hidden');
+      // Hide build steps initially (shown only if build-from-source is triggered)
+      for (const id of buildStepIds) {
+        const el = document.getElementById(id);
+        if (el) el.classList.add('hidden');
+      }
 
       markStep('stepBinaries', 'active', 'Finding USDmd binaries...');
       markStep('stepDirs', '', 'Creating data directories...');
@@ -4746,7 +4776,15 @@ window.addEventListener('unhandledrejection', function(e) {
         const result = await window.electronAPI.localNodeSetup({ seedNodes: seeds });
 
         if (!result.ok) {
-          markStep('stepBinaries', 'error', result.error || 'Setup failed');
+          // Find the last active build step and mark it as error
+          let errorStep = 'stepBinaries';
+          for (const id of buildStepIds) {
+            const el = document.getElementById(id);
+            if (el && !el.classList.contains('hidden') && el.className.includes('active')) {
+              errorStep = id;
+            }
+          }
+          markStep(errorStep, 'error', result.error || 'Setup failed');
           showMessage('nodeMessage', result.error || 'Setup failed', true);
           btnCreate.disabled = false;
           btnCreate.textContent = '\u25B6 Create Node & Start Syncing';
@@ -4755,10 +4793,18 @@ window.addEventListener('unhandledrejection', function(e) {
 
         // Animate through completed steps
         for (const step of result.steps || []) {
-          if (/found.*USDmd|installed.*USDmd/i.test(step)) markStep('stepBinaries', 'done', step);
+          if (/found.*USDmd|downloaded.*USDmd|built.*USDmd/i.test(step)) markStep('stepBinaries', 'done', step);
           if (/created|directory/i.test(step)) markStep('stepDirs', 'done', step);
           if (/started.*USDmd|daemon.*running/i.test(step)) markStep('stepDaemon', 'done', step);
         }
+        // Mark build steps as done if they were shown
+        for (const id of buildStepIds) {
+          const el = document.getElementById(id);
+          if (el && !el.classList.contains('hidden') && !el.className.includes('done')) {
+            markStep(id, 'done');
+          }
+        }
+        markStep('stepBinaries', 'done');
         markStep('stepDirs', 'done', 'Data directories ready');
         if (!result.steps?.some(s => /started|running/i.test(s))) {
           markStep('stepDaemon', 'done', 'Daemon started');

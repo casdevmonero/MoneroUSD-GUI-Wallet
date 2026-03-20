@@ -12,15 +12,18 @@ let isUpdating = false; // true when quitAndInstall is about to fire
 
 /* ── Auto-Update (OTA) ─────────────────────────────────────── */
 autoUpdater.autoDownload = true;           // silently download when available
-autoUpdater.autoInstallOnAppQuit = true;
-// Always enable logging for update debugging
+autoUpdater.autoInstallOnAppQuit = false;  // We handle install manually (unsigned macOS apps)
 autoUpdater.logger = console;
-autoUpdater.logger.transports = { file: { level: 'info' } };
+
+let updateDownloaded = false; // Track whether download completed — prevents error events from hiding the banner
 
 function initAutoUpdater() {
-  autoUpdater.checkForUpdates().catch(() => {});
+  autoUpdater.checkForUpdates().catch((e) => {
+    console.log('[update] checkForUpdates failed:', e.message);
+  });
 
   autoUpdater.on('update-available', (info) => {
+    console.log('[update] Update available:', info.version);
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('update-available', {
         version: info.version,
@@ -29,13 +32,15 @@ function initAutoUpdater() {
     }
   });
 
-  autoUpdater.on('update-not-available', () => {
+  autoUpdater.on('update-not-available', (info) => {
+    console.log('[update] No update available. Current:', app.getVersion(), 'Latest:', info?.version);
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('update-status', { status: 'up-to-date' });
     }
   });
 
   autoUpdater.on('download-progress', (progress) => {
+    console.log('[update] Download progress:', Math.round(progress.percent) + '%');
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('update-progress', {
         percent: Math.round(progress.percent),
@@ -46,14 +51,23 @@ function initAutoUpdater() {
   });
 
   autoUpdater.on('update-downloaded', (info) => {
+    updateDownloaded = true;
+    console.log('[update] Download COMPLETE. Version:', info.version);
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('update-downloaded', { version: info.version });
     }
-    // Do NOT auto-restart — let the user click "Restart Now".
-    // On macOS, quitAndInstall often fails silently, so user-initiated is more reliable.
   });
 
   autoUpdater.on('error', (err) => {
+    console.error('[update] Error:', err.message);
+    // CRITICAL: Do NOT send error to renderer if the update has already been downloaded.
+    // electron-updater fires spurious errors after download on unsigned macOS apps
+    // (e.g., code signing verification failures). These errors hide the restart banner,
+    // preventing the user from ever installing the update.
+    if (updateDownloaded) {
+      console.log('[update] Ignoring post-download error — update is ready to install');
+      return;
+    }
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('update-status', { status: 'error', message: err.message });
     }

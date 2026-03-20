@@ -6327,9 +6327,11 @@ window.addEventListener('unhandledrejection', function(e) {
     const progressBar = document.getElementById('updateProgressBar');
 
     let pendingVersion = '';
+    let downloadComplete = false; // Once true, banner NEVER hides
 
     // Update auto-downloads in the background; show progress banner
     window.electronAPI.onUpdateAvailable((data) => {
+      console.log('[update-ui] Update available:', data.version);
       pendingVersion = data.version;
       bannerText.textContent = `Downloading update v${data.version}...`;
       btnAction.textContent = 'Downloading...';
@@ -6347,6 +6349,8 @@ window.addEventListener('unhandledrejection', function(e) {
     });
 
     window.electronAPI.onUpdateDownloaded((data) => {
+      console.log('[update-ui] Download complete:', data.version);
+      downloadComplete = true; // Lock banner visible permanently
       progressWrap.classList.add('hidden');
       btnDismiss.classList.add('hidden');
       btnAction.disabled = false;
@@ -6366,7 +6370,7 @@ window.addEventListener('unhandledrejection', function(e) {
       };
       bannerText.textContent = `Update v${data.version} downloaded. Click to restart.`;
       banner.classList.remove('hidden');
-      // Make banner persistent and visible
+      // Make banner persistent, visible, and impossible to miss
       banner.style.background = '#FF6600';
       banner.style.position = 'fixed';
       banner.style.top = '0';
@@ -6376,7 +6380,15 @@ window.addEventListener('unhandledrejection', function(e) {
     });
 
     window.electronAPI.onUpdateStatus((data) => {
+      console.log('[update-ui] Status event:', data.status, data.message || '');
+      // NEVER hide the banner if the download already completed.
+      // electron-updater fires spurious errors after download on unsigned macOS apps.
+      if (downloadComplete) {
+        console.log('[update-ui] Ignoring status event — download already complete, banner stays visible');
+        return;
+      }
       if (data.status === 'error') {
+        console.log('[update-ui] Pre-download error, hiding banner:', data.message);
         banner.classList.add('hidden');
       }
     });

@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   localNodeSetup: (opts) => ipcRenderer.invoke('local-node-setup', opts),
   localWalletRpcStart: (opts) => ipcRenderer.invoke('local-wallet-rpc-start', opts),
   localWalletRpcStop: () => ipcRenderer.invoke('local-wallet-rpc-stop'),
+  localWalletRpcRunning: () => ipcRenderer.invoke('local-wallet-rpc-running'),
 
   // Auto-update
   updateCheck: () => ipcRenderer.invoke('update-check'),

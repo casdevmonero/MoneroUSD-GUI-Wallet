@@ -5427,52 +5427,65 @@ window.addEventListener('unhandledrejection', function(e) {
         }
         (async function runSyncInBackground() {
           const importedName = filename;
-          // Don't call refresh/rescan_blockchain — wallet-rpc is single-threaded and
-          // will block ALL RPC calls for the entire scan duration (5+ minutes).
-          // Instead, wallet-rpc auto-refreshes internally after restore_deterministic_wallet.
-          // We poll get_height with short timeouts to detect when scanning completes.
-          const daemonHeight = await getDaemonHeight() || 1;
-          showSyncStatus('Scanning blockchain… wallet-rpc is syncing (' + daemonHeight.toLocaleString() + ' blocks). Please wait…', true);
-
-          // Poll until wallet-rpc becomes responsive (i.e. finished scanning)
+          // The light-wallet-service returns restore_deterministic_wallet immediately
+          // while wallet-rpc scans in the background. During scanning, ALL other RPC calls
+          // return "Wallet is still syncing after restore. Please wait." errors.
+          // Phase 1: Wait for wallet-rpc to become responsive (stop returning "still syncing").
           const maxWaitMs = 600000; // 10 minutes max
           const pollInterval = 5000; // check every 5s
           const began = Date.now();
-          let walletReady = false;
+          let walletResponsive = false;
+
+          showSyncStatus('Scanning blockchain… please wait', true);
+
           while (Date.now() - began < maxWaitMs) {
             if (getActiveWalletName() !== importedName) return;
             try {
-              const hi = await rpcImmediate('get_height', {}, { timeoutMs: 3000 });
+              const hi = await rpcImmediate('get_height', {}, { timeoutMs: 8000 });
               if (hi && hi.height != null) {
-                const h = Number(hi.height);
-                const pct = daemonHeight > 0 ? Math.min(100, Math.round((h / daemonHeight) * 100)) : 0;
-                showSyncStatus('Syncing… block ' + h.toLocaleString() + ' / ' + daemonHeight.toLocaleString() + ' (' + pct + '%)', true);
-                if (h >= daemonHeight - 1) { walletReady = true; break; }
+                walletResponsive = true;
+                showSyncStatus('Wallet synced to height ' + Number(hi.height).toLocaleString() + '. Refreshing…', true);
+                break;
               }
-            } catch (_) {
-              // wallet-rpc still scanning, show estimated progress
-              const elapsed = (Date.now() - began) / 1000;
-              showSyncStatus('Scanning blockchain… (' + Math.round(elapsed) + 's elapsed, please wait)', true);
+            } catch (e) {
+              const elapsed = Math.round((Date.now() - began) / 1000);
+              const msg = (e && e.message) || '';
+              if (/still syncing/i.test(msg)) {
+                showSyncStatus('Scanning blockchain… (' + elapsed + 's elapsed, please wait)', true);
+              } else {
+                showSyncStatus('Waiting for wallet RPC… (' + elapsed + 's elapsed)', true);
+              }
             }
             await new Promise(ok => setTimeout(ok, pollInterval));
           }
 
           if (getActiveWalletName() !== importedName) return;
-          if (!walletReady) {
+          if (!walletResponsive) {
             showSyncStatus('Sync is taking longer than expected. Balance will update when ready.', true);
           }
 
-          // Wallet-rpc is now responsive — configure and fetch balance
+          // Phase 2: Wallet-rpc is responsive — do a full refresh to ensure all blocks are scanned.
+          showSyncStatus('Refreshing wallet…', true);
+          try {
+            await rpcImmediate('refresh', { start_height: 0 }, { timeoutMs: 300000 });
+          } catch (_) {}
+
+          if (getActiveWalletName() !== importedName) return;
+
+          // Phase 3: Configure wallet and fetch address + balance
           await configureWalletRpcMoneroStyle().catch(() => {});
           await refreshAddress().catch(() => {});
           rpcQueue = Promise.resolve();
-          for (let balRetry = 0; balRetry < 3; balRetry++) {
-            try {
-              await rpcImmediate('refresh', { start_height: 0 }, { timeoutMs: 30000 });
-            } catch (_) {}
+          for (let balRetry = 0; balRetry < 5; balRetry++) {
             await refreshBalances({ force: true }).catch(() => {});
             if (lastUsdmBalanceAtomic > 0n) break;
-            await new Promise(ok => setTimeout(ok, 2000));
+            // If balance is still 0, do another refresh pass and retry
+            if (balRetry < 4) {
+              try {
+                await rpcImmediate('refresh', {}, { timeoutMs: 30000 });
+              } catch (_) {}
+              await new Promise(ok => setTimeout(ok, 3000));
+            }
           }
           await refreshTransfers().catch(() => {});
           await updateDashboardSyncInfo().catch(() => {});
@@ -5483,6 +5496,7 @@ window.addEventListener('unhandledrejection', function(e) {
           if (getActiveWalletName() === filename) {
             showSyncStatus('', false);
             showMessage('importMessage', 'Import complete. Click Refresh to sync.', false);
+            startBalanceRefreshInterval();
           }
         });
       } catch (e) {
@@ -5962,15 +5976,47 @@ window.addEventListener('unhandledrejection', function(e) {
           }
           clearTimeout(restoreWatchdog);
 
-          // Wallet is created instantly — show address and UI immediately
-          importInFlight = false;
+          // Wallet restore accepted — wallet-rpc is scanning blockchain in background.
+          // Wait for it to finish before fetching address/balance.
           setRpcStatus(true);
-          showSyncStatus('Wallet restored. Loading address…', true);
+          showSyncStatus('Scanning blockchain… please wait', true);
 
+          // Phase 1: Wait for wallet-rpc to stop returning "still syncing" errors
+          const welcomeMaxWait = 600000;
+          const welcomeBegan = Date.now();
+          let welcomeResponsive = false;
+          while (Date.now() - welcomeBegan < welcomeMaxWait) {
+            try {
+              const hi = await rpcImmediate('get_height', {}, { timeoutMs: 8000 });
+              if (hi && hi.height != null) {
+                welcomeResponsive = true;
+                showSyncStatus('Wallet synced to height ' + Number(hi.height).toLocaleString() + '. Refreshing…', true);
+                break;
+              }
+            } catch (e) {
+              const elapsed = Math.round((Date.now() - welcomeBegan) / 1000);
+              const msg = (e && e.message) || '';
+              if (/still syncing/i.test(msg)) {
+                showSyncStatus('Scanning blockchain… (' + elapsed + 's elapsed, please wait)', true);
+              } else {
+                showSyncStatus('Waiting for wallet RPC… (' + elapsed + 's elapsed)', true);
+              }
+            }
+            await new Promise(ok => setTimeout(ok, 5000));
+          }
+
+          // Phase 2: Full refresh to ensure all blocks are scanned
+          importInFlight = false;
+          showSyncStatus('Refreshing wallet…', true);
+          try {
+            await rpcImmediate('refresh', { start_height: 0 }, { timeoutMs: 300000 });
+          } catch (_) {}
+
+          // Phase 3: Configure, get address, get balance
           await configureWalletRpcMoneroStyle().catch(() => {});
           await refreshAddress().catch(() => {});
 
-          // Biometric registration BEFORE scanning — wallet is created, we have the address
+          // Biometric registration — wallet is now fully synced, we have the address
           if (currentWalletAddress) {
             await notifyServerWalletAddress(currentWalletAddress);
             const bioAlready = await checkBiometricStatus(currentWalletAddress).catch(() => ({ registered: false }));
@@ -5985,43 +6031,19 @@ window.addEventListener('unhandledrejection', function(e) {
             }
           }
 
-          startBalanceRefreshInterval();
-
-          // Don't call refresh/rescan_blockchain — wallet-rpc is single-threaded and
-          // blocks ALL RPC calls during scan. Let auto-refresh handle it, poll get_height.
-          const welcomeDaemonHeight = await getDaemonHeight() || 1;
-          showSyncStatus('Scanning blockchain… (' + welcomeDaemonHeight.toLocaleString() + ' blocks). Please wait…', true);
-
-          // Poll until wallet-rpc becomes responsive
-          const welcomeMaxWait = 600000;
-          const welcomeBegan = Date.now();
-          let welcomeReady = false;
-          while (Date.now() - welcomeBegan < welcomeMaxWait) {
-            try {
-              const hi = await rpcImmediate('get_height', {}, { timeoutMs: 3000 });
-              if (hi && hi.height != null) {
-                const h = Number(hi.height);
-                const pct = welcomeDaemonHeight > 0 ? Math.min(100, Math.round((h / welcomeDaemonHeight) * 100)) : 0;
-                showSyncStatus('Syncing… block ' + h.toLocaleString() + ' / ' + welcomeDaemonHeight.toLocaleString() + ' (' + pct + '%)', true);
-                if (h >= welcomeDaemonHeight - 1) { welcomeReady = true; break; }
-              }
-            } catch (_) {
-              const elapsed = (Date.now() - welcomeBegan) / 1000;
-              showSyncStatus('Scanning blockchain… (' + Math.round(elapsed) + 's elapsed, please wait)', true);
-            }
-            await new Promise(ok => setTimeout(ok, 5000));
-          }
-
           rpcQueue = Promise.resolve();
-          for (let balRetry = 0; balRetry < 3; balRetry++) {
-            try {
-              await rpcImmediate('refresh', { start_height: 0 }, { timeoutMs: 30000 });
-            } catch (_) {}
+          for (let balRetry = 0; balRetry < 5; balRetry++) {
             await refreshBalances({ force: true }).catch(() => {});
             if (lastUsdmBalanceAtomic > 0n) break;
-            await new Promise(ok => setTimeout(ok, 2000));
+            if (balRetry < 4) {
+              try {
+                await rpcImmediate('refresh', {}, { timeoutMs: 30000 });
+              } catch (_) {}
+              await new Promise(ok => setTimeout(ok, 3000));
+            }
           }
           await refreshTransfers().catch(() => {});
+          startBalanceRefreshInterval();
           showSyncStatus('', false);
         } catch (e) {
           const errMsg = (e.message || 'Unknown');
@@ -6204,32 +6226,11 @@ window.addEventListener('unhandledrejection', function(e) {
         await configureWalletRpcMoneroStyle().catch(() => {});
       }
       if (autoConnectCancelled || importInFlight) return;
-      // Sync wallet with blockchain on startup — poll get_height instead of
-      // calling refresh (which blocks the single-threaded wallet-rpc for minutes).
-      {
-        const daemonH = await getDaemonHeight() || 1;
-        showSyncStatus('Syncing wallet with blockchain…', true);
-        const maxWaitMs = 600000; // 10 minutes max
-        const pollInterval = 5000;
-        const began = Date.now();
-        let synced = false;
-        while (Date.now() - began < maxWaitMs) {
-          if (autoConnectCancelled || importInFlight) return;
-          try {
-            const hi = await rpcImmediate('get_height', {}, { timeoutMs: 3000 });
-            if (hi && hi.height != null) {
-              const h = Number(hi.height);
-              const pct = daemonH > 0 ? Math.min(100, Math.round((h / daemonH) * 100)) : 0;
-              showSyncStatus('Syncing… block ' + h.toLocaleString() + ' / ' + daemonH.toLocaleString() + ' (' + pct + '%)', true);
-              if (h >= daemonH - 1) { synced = true; break; }
-            }
-          } catch (_) {
-            const elapsed = Math.round((Date.now() - began) / 1000);
-            showSyncStatus('Scanning blockchain… (' + elapsed + 's elapsed, please wait)', true);
-          }
-          await new Promise(ok => setTimeout(ok, pollInterval));
-        }
-      }
+      // Sync wallet with blockchain on startup — do a full refresh then fetch balance.
+      showSyncStatus('Syncing wallet with blockchain…', true);
+      try {
+        await rpcImmediate('refresh', { start_height: 0 }, { timeoutMs: 300000 });
+      } catch (_) {}
       if (autoConnectCancelled || importInFlight) return;
       await refreshAddress().catch(() => {});
       await refreshBalances({ force: true }).catch(() => {});

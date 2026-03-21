@@ -6052,7 +6052,7 @@ window.addEventListener('unhandledrejection', function(e) {
           setRpcStatus(true);
           showSyncStatus('Scanning blockchain… please wait', true);
 
-          // Phase 1: Wait for wallet-rpc to stop returning "still syncing" errors
+          // Phase 1: Wait for wallet-rpc to become responsive, then refresh
           const welcomeMaxWait = 600000;
           const welcomeBegan = Date.now();
           let welcomeResponsive = false;
@@ -6061,7 +6061,7 @@ window.addEventListener('unhandledrejection', function(e) {
               const hi = await rpcImmediate('get_height', {}, { timeoutMs: 8000 });
               if (hi && hi.height != null) {
                 welcomeResponsive = true;
-                showSyncStatus('Wallet synced to height ' + Number(hi.height).toLocaleString() + '. Refreshing…', true);
+                showSyncStatus('Wallet at height ' + Number(hi.height).toLocaleString() + '. Refreshing…', true);
                 break;
               }
             } catch (e) {
@@ -6073,14 +6073,14 @@ window.addEventListener('unhandledrejection', function(e) {
                 showSyncStatus('Waiting for wallet RPC… (' + elapsed + 's elapsed)', true);
               }
             }
-            await new Promise(ok => setTimeout(ok, 5000));
+            await new Promise(ok => setTimeout(ok, 2000));
           }
 
-          // Phase 2: Full refresh to ensure all blocks are scanned
+          // Phase 2: Refresh to scan any remaining blocks
           importInFlight = false;
           showSyncStatus('Refreshing wallet…', true);
           try {
-            await rpcImmediate('refresh', { start_height: 0 }, { timeoutMs: 300000 });
+            await rpcImmediate('refresh', {}, { timeoutMs: 300000 });
           } catch (_) {}
 
           // Phase 3: Configure, get address, get balance

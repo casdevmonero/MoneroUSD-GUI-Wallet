@@ -16,6 +16,7 @@ autoUpdater.autoInstallOnAppQuit = false;  // We handle install manually (unsign
 autoUpdater.logger = console;
 
 let updateDownloaded = false; // Track whether download completed — prevents error events from hiding the banner
+let updateFilePath = null; // Saved immediately on download-complete, before any cleanup can delete it
 
 function initAutoUpdater() {
   autoUpdater.checkForUpdates().catch((e) => {
@@ -53,6 +54,20 @@ function initAutoUpdater() {
   autoUpdater.on('update-downloaded', (info) => {
     updateDownloaded = true;
     console.log('[update] Download COMPLETE. Version:', info.version);
+    // Save the downloaded file path immediately — electron-updater may clean it up later on error
+    try {
+      const cacheDir = path.join(app.getPath('userData'), '..', app.name + '-updater');
+      if (fs.existsSync(cacheDir)) {
+        const zips = fs.readdirSync(cacheDir).filter(f => f.endsWith('.zip'));
+        if (zips.length > 0) {
+          zips.sort((a, b) => fs.statSync(path.join(cacheDir, b)).mtimeMs - fs.statSync(path.join(cacheDir, a)).mtimeMs);
+          updateFilePath = path.join(cacheDir, zips[0]);
+          console.log('[update] Saved update file path:', updateFilePath);
+        }
+      }
+    } catch (e) {
+      console.log('[update] Could not save update file path:', e.message);
+    }
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('update-downloaded', { version: info.version });
     }
@@ -105,32 +120,36 @@ ipcMain.handle('update-install', async () => {
     // macOS: Squirrel quitAndInstall is unreliable for unsigned apps.
     // Manual approach: find the cached update zip, extract, replace app, relaunch.
     try {
-      const appPath = app.getAppPath(); // e.g. /Applications/Monero USD Wallet.app/Contents/Resources/app.asar
-      const appBundle = path.resolve(appPath, '..', '..', '..'); // .app bundle root
-      const appDir = path.dirname(appBundle); // e.g. /Applications/
-      const appName = path.basename(appBundle); // e.g. Monero USD Wallet.app
+      const appPath = app.getAppPath();
+      const appBundle = path.resolve(appPath, '..', '..', '..');
+      const appDir = path.dirname(appBundle);
+      const appName = path.basename(appBundle);
 
-      // Find the downloaded update zip in electron-updater's cache
-      const cacheDir = path.join(app.getPath('userData'), '..', 'monerousd-desktop-updater');
+      // Find the downloaded update zip — check saved path first, then scan cache dir
+      const cacheDir = path.join(app.getPath('userData'), '..', app.name + '-updater');
       console.log('[update] Looking for cached update in:', cacheDir);
 
-      let zipPath = null;
-      if (fs.existsSync(cacheDir)) {
-        const files = fs.readdirSync(cacheDir).filter(f => f.endsWith('.zip'));
-        if (files.length > 0) {
-          // Use the most recently modified zip
-          files.sort((a, b) => {
-            const sa = fs.statSync(path.join(cacheDir, a));
-            const sb = fs.statSync(path.join(cacheDir, b));
-            return sb.mtimeMs - sa.mtimeMs;
-          });
-          zipPath = path.join(cacheDir, files[0]);
+      let zipPath = updateFilePath; // Saved when update-downloaded fired
+      if (!zipPath || !fs.existsSync(zipPath)) {
+        zipPath = null;
+        if (fs.existsSync(cacheDir)) {
+          const files = fs.readdirSync(cacheDir).filter(f => f.endsWith('.zip'));
+          if (files.length > 0) {
+            files.sort((a, b) => fs.statSync(path.join(cacheDir, b)).mtimeMs - fs.statSync(path.join(cacheDir, a)).mtimeMs);
+            zipPath = path.join(cacheDir, files[0]);
+          }
         }
       }
 
       if (!zipPath || !fs.existsSync(zipPath)) {
-        console.error('[update] No cached update zip found, falling back to quitAndInstall');
-        autoUpdater.quitAndInstall(false, true);
+        console.error('[update] No cached update zip found, using quitAndInstall + relaunch');
+        // Even though Squirrel may fail to verify, quitAndInstall still calls app.quit().
+        // Set autoInstallOnAppQuit so the update applies if possible.
+        autoUpdater.autoInstallOnAppQuit = true;
+        try { autoUpdater.quitAndInstall(false, true); } catch (_) {}
+        // Guarantee exit — relaunch so user isn't left with nothing
+        app.relaunch();
+        app.exit(0);
         return;
       }
 
@@ -155,27 +174,28 @@ ipcMain.handle('update-install', async () => {
       const newAppPath = path.join(tmpDir, newApp);
       const backupPath = appBundle + '.backup';
 
-      // Create a shell script that:
-      // 1. Waits for the app to quit
-      // 2. Replaces the old app with the new one
-      // 3. Relaunches the app
-      // 4. Cleans up
+      // Shell script: wait for app to quit, replace, remove quarantine, relaunch
       const script = `#!/bin/bash
-sleep 2
+# Wait for the app process to fully exit
+for i in $(seq 1 10); do
+  pgrep -f "${appName}" >/dev/null 2>&1 || break
+  sleep 1
+done
 # Remove old backup if exists
 rm -rf "${backupPath}"
 # Move current app to backup
 mv "${appBundle}" "${backupPath}" 2>/dev/null
 # Move new app into place
-mv "${newAppPath}" "${path.join(appDir, appName)}"
-# Fix permissions
-chmod -R 755 "${path.join(appDir, appName)}"
-# Remove quarantine flag
-xattr -dr com.apple.quarantine "${path.join(appDir, appName)}" 2>/dev/null
-# Relaunch
-open "${path.join(appDir, appName)}"
-# Cleanup
-rm -rf "${backupPath}"
+if mv "${newAppPath}" "${path.join(appDir, appName)}"; then
+  chmod -R 755 "${path.join(appDir, appName)}"
+  xattr -dr com.apple.quarantine "${path.join(appDir, appName)}" 2>/dev/null
+  open "${path.join(appDir, appName)}"
+  rm -rf "${backupPath}"
+else
+  # Restore backup if move failed (e.g. permission denied)
+  mv "${backupPath}" "${appBundle}" 2>/dev/null
+  open "${appBundle}"
+fi
 rm -rf "${tmpDir}"
 `;
       const scriptPath = path.join(tmpDir, 'update.sh');
@@ -192,15 +212,17 @@ rm -rf "${tmpDir}"
 
     } catch (e) {
       console.error('[update] Manual update failed:', e);
-      // Last resort fallback
-      try { autoUpdater.quitAndInstall(false, true); } catch (_) { app.exit(0); }
+      // Always guarantee the app exits and relaunches
+      app.relaunch();
+      app.exit(0);
     }
   } else {
-    // Windows/Linux: Squirrel works fine
+    // Windows/Linux
     try {
       autoUpdater.quitAndInstall(true, true);
     } catch (e) {
       console.error('[update] quitAndInstall failed:', e);
+      app.relaunch();
       app.exit(0);
     }
   }

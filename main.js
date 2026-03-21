@@ -307,7 +307,10 @@ function runShell(cmd, opts = {}) {
         MAKEFLAGS: `-j${os.cpus().length}`,
         NONINTERACTIVE: '1',
         HOMEBREW_NO_AUTO_UPDATE: '1',
+        HOMEBREW_NO_INSTALL_CLEANUP: '1',
         CI: '1',
+        // Prevent sudo from hanging — fail immediately instead of waiting for password
+        SUDO_ASKPASS: '/bin/false',
       },
     });
     proc.stdin.end();
@@ -359,7 +362,7 @@ async function buildFromSource(binDir) {
     // Check for Homebrew — do NOT try to install it automatically (needs sudo)
     let brewPath = '';
     try {
-      brewPath = await runShell('which brew || [ -x /opt/homebrew/bin/brew ] && echo /opt/homebrew/bin/brew || [ -x /usr/local/bin/brew ] && echo /usr/local/bin/brew', { timeout: 10000 });
+      brewPath = await runShell('which brew 2>/dev/null || ([ -x /opt/homebrew/bin/brew ] && echo /opt/homebrew/bin/brew) || ([ -x /usr/local/bin/brew ] && echo /usr/local/bin/brew)', { timeout: 10000 });
     } catch (_) {}
 
     if (!brewPath || !brewPath.trim()) {
@@ -382,7 +385,16 @@ async function buildFromSource(binDir) {
     } catch (e) {
       const em = e.message || '';
       // If already installed, brew returns non-zero but that's ok
-      if (!/already installed/i.test(em) && !/nothing to install/i.test(em)) {
+      if (/already installed/i.test(em) || /nothing to install/i.test(em)) {
+        // Fine — deps are already there
+      } else if (/sudo|password|Permission denied|admin/i.test(em)) {
+        throw new Error(
+          'Homebrew needs admin access to install build dependencies.\n\n' +
+          'Please open Terminal and run:\n' +
+          'brew install cmake boost openssl pkg-config\n\n' +
+          'Then click "Create Node" again.'
+        );
+      } else {
         throw new Error('Failed to install dependencies via Homebrew: ' + em);
       }
     }
@@ -429,9 +441,12 @@ async function buildFromSource(binDir) {
   const buildDir = path.join(srcDir, 'build', 'release');
   if (!fs.existsSync(buildDir)) fs.mkdirSync(buildDir, { recursive: true });
 
-  // cmake
+  // cmake — on macOS, help cmake find brew-installed OpenSSL
   sendBuildProgress('build', 'Running cmake...');
-  await runShell(`cd "${buildDir}" && cmake -D CMAKE_BUILD_TYPE=Release ../..`, { cwd: srcDir, timeout: 120000 });
+  const cmakeExtra = process.platform === 'darwin'
+    ? '-D OPENSSL_ROOT_DIR=$(brew --prefix openssl 2>/dev/null || echo /opt/homebrew/opt/openssl) '
+    : '';
+  await runShell(`cd "${buildDir}" && cmake ${cmakeExtra}-D CMAKE_BUILD_TYPE=Release ../..`, { cwd: srcDir, timeout: 120000 });
 
   // make
   sendBuildProgress('build', `Building (${cpus} parallel jobs)... This takes a while.`);
@@ -717,7 +732,7 @@ ipcMain.handle('local-node-setup', async (event, { seedNodes = [] } = {}) => {
         const msg = buildErr.message || '';
         return {
           ok: false,
-          error: msg,
+          error: 'Could not set up USDmd: ' + msg,
           steps,
         };
       }

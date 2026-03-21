@@ -157,34 +157,16 @@ window.addEventListener('unhandledrejection', function(e) {
 
   function lockWallet() {
     walletLocked = true;
-    // Clear sensitive in-memory data
     clearSensitiveInputs();
     walletPasswordCache.clear();
-    // Show lock overlay
-    let overlay = document.getElementById('lockOverlay');
-    if (!overlay) {
-      overlay = document.createElement('div');
-      overlay.id = 'lockOverlay';
-      overlay.innerHTML = '<div class="lock-dialog">'
-        + '<h2>Session Locked</h2>'
-        + '<p>Your wallet has been locked due to inactivity.</p>'
-        + '<button id="unlockBtn" class="btn btn-primary">Unlock</button>'
-        + '</div>';
-      overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.85);z-index:99999;display:flex;align-items:center;justify-content:center;';
-      document.body.appendChild(overlay);
-      document.getElementById('unlockBtn')?.addEventListener('click', unlockWallet);
-    }
-    overlay.style.display = 'flex';
+    rpcImmediate("close_wallet", {}, { timeoutMs: 5000 }).catch(() => {});
+    showWelcomePage();
+    setRpcStatus(false);
   }
 
   function unlockWallet() {
     walletLocked = false;
-    const overlay = document.getElementById('lockOverlay');
-    if (overlay) overlay.style.display = 'none';
     resetInactivityTimer();
-    // Re-sync after unlock
-    refreshBalances({ force: true }).catch(() => {});
-    refreshTransfers().catch(() => {});
   }
 
   // Track user activity

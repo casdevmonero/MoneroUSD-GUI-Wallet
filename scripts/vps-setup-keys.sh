@@ -6,7 +6,7 @@
 
 VPS_IP="148.163.122.39"
 VPS_USER="root"
-VPS_PASS='x)gWWt631[FF2h'
+VPS_PASS=''  # Set your password here or pass via: VPS_PASS='yourpassword' bash scripts/vps-setup-keys.sh
 KEY_FILE="$HOME/.ssh/id_rsa_vps"
 
 echo "=== VPS SSH Key Setup ==="

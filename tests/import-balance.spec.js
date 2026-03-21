@@ -8,12 +8,7 @@
  *   - USDmd daemon on port 17750
  *
  * Run: npx playwright test tests/import-balance.spec.js
- *
- * Test seed (25-word Monero mnemonic):
- *   camp coexist roomy hobby inmate festival alarms ailments bias warped sprig
- *   pedantic elbow always ablaze awful vexed down second strained atlas magically
- *   lobster luxury lobster
- */
+ 
 
 const { test, expect } = require('@playwright/test');
 

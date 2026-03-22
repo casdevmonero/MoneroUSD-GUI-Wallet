@@ -1,0 +1,770 @@
+==========================================================================================
+FCMP++ PROOF BLOBS & VERIFICATION TRANSCRIPT — MoneroUSD Network
+Generated: 2026-03-15
+==========================================================================================
+
+ALL DATA BELOW IS PUBLIC ON-CHAIN INFORMATION — NO PRIVATE KEYS OR SECRETS.
+Sources: daemon RPC get_transactions (decode_as_json) + fcmp_ffi_debug.log
+
+──────────────────────────────────────────────────────────────────────────────────────────
+TRANSACTION 1 of 3
+──────────────────────────────────────────────────────────────────────────────────────────
+  TX Hash       : 7a5f05f9b073eb196f714b6b335c6facc8e8772df4150eeb5af61ea87f559881
+  Block Height  : 1
+  TX Version    : 9
+  RCT Type      : 11 (FCMP++ / Bulletproofs+)
+  Fee           : 50000000 atomic units
+  Offshore Fee  : 0 atomic units
+  Inputs        : 1
+  Outputs       : 2
+
+  ┌─ INPUTS ─────────────────────────────────────────────────────────────────────┐
+  │ Input 0:
+  │   Asset Type  : USDm
+  │   Key Image   : 524caa2c6ae877f6f745a3e7f25be52ac77b3e950e752664aba73335b40cb683
+  │   Key Offsets : [0]
+  │   Amount      : 0 (confidential)
+  └──────────────────────────────────────────────────────────────────────────────┘
+
+  ┌─ OUTPUTS ────────────────────────────────────────────────────────────────────┐
+  │ Output 0:
+  │   Amount      : 0 (confidential)
+  │   One-time Key: N/A
+  │   View Tag    : N/A
+  │   Asset Type  : N/A
+  │   Commitment  : e55cf8f94c0bc5e7dfc03f07b9c3c5a97dbf407a85ca7b647acc0edb9fe8d5bc
+  │ Output 1:
+  │   Amount      : 0 (confidential)
+  │   One-time Key: N/A
+  │   View Tag    : N/A
+  │   Asset Type  : N/A
+  │   Commitment  : 40f15f8db1ababa901c949b8d1cfaed1e427926b0894fbf463db31becc52493c
+  └──────────────────────────────────────────────────────────────────────────────┘
+
+  ┌─ FCMP++ MEMBERSHIP PROOF ────────────────────────────────────────────────────┐
+  │ Tree Root Type : 1 — Selene (C1)
+  │ Tree Root      : 5db358d2ad4127e9be071d56f79e5d053b653cd8d11f8f1f9f704bce59b6fba5
+  │ Tree Layers    : 1
+  │
+  │ Input 0 Proof Data:
+  │   Key Image   : 524caa2c6ae877f6f745a3e7f25be52ac77b3e950e752664aba73335b40cb683
+  │   C_tilde     : 0d00c00a4b6fd1bed7a66d081f684b6648decca4a9289e4bb80cee413f29b0db
+  │   Pseudo-out  : bef735e83ae714a01d41ea2909bcc4e56cda2b621300796d69c9a2b6c5d40d02
+  │
+  │ FCMP++ Proof Blob: 7673 bytes
+  │
+  │   ┌─ Raw Proof Hex ─────────────────────────────────────────────────────┐
+  │   │ 6f66be80202dd7c55599b79344d9c3ee38728e7c93416e8692d8be03c9ba3ea1
+  │   │ 7a6f9347513f9a51270c9936c2903f102cf98e273f2c840111fef3308e84ccdf
+  │   │ 3d91de3349184cd4fd77323d74c82b7c9c20ceb3d6a3ba34352cec3e92d56faa
+  │   │ d994c9b9c97949d870df99a4953ea13642a1ef99d5cf76d193eceb279b59b33a
+  │   │ 5059c4cda32ab57d585f54d690c06ed50c02a1c28197d16674d7b783dda1d968
+  │   │ 83005678946563ecf4fe44533fc4fd1377e66bc1b0809da223a57420f9cf4ce6
+  │   │ c1b036e5eea0fb33dd49509702fccd0e035ba7afe1862a96c2f8ed4047d671bf
+  │   │ c769dead95fdd4cca9a2ecd27f18696c5f3998f2fe768185ea154d57bad882ef
+  │   │ c2788a578c061d7a140928d98be1a049b74dc3e83266b92a9ef51af2349b8420
+  │   │ 3df0ee35b8c82b6e6fbba921bfc7168e90d80144303ddab1e9ad69c265bf6504
+  │   │ e3a48dd961b46f4f16627165a9bab9e25bcfa2dbe2384f8391e05ee713a1e301
+  │   │ 4627947493120e5bda650d6c108566fdb63d8b45103f383706bbbb3619eefb0a
+  │   │ 18290157c577d7d27e74bf072ddcec9f05ab21f704ee9419ebdaa453e52a6b06
+  │   │ f2ab038e9ac182f3ab8317ea733b263b7559c29c07f03c7cbd0ec7a1331aaf0c
+  │   │ c2107718626cb36478981270c3391cff00acabef0067807e403fdbf9a12f340d
+  │   │ bc35c6291a2e89a19a55fce1a13623025d07ae8455f4ab0184490a2faad600d9
+  │   │ 5513b7b86fe52a801be9674515f3654eae96a0edab109d45d7969ef09255dde6
+  │   │ 68fe638322538931731e034280f0b341b1823bf5e66edbdfab4065a09844d13c
+  │   │ aaf62bbdf629c4151f221cb86453402823559bd3c7780c47bad4994e423070d9
+  │   │ 6d30db7bc1c6afc0036b961aa61d3f4f5f724348d0e6154c576f22cb63597f9f
+  │   │ 5815d2ca993b478e6d658d385ba69a747bc60780df779f27994550ae1e283ab2
+  │   │ 3dd2505b19ad1057be605c73ba056c2ba0483c495e323ef7fcf29755ff43ad84
+  │   │ d05445f61b2393683ce02cb2934e10b57686b1e7e5aa6878845801d8cfe1637b
+  │   │ b801cd61b9630dd0dddb421f6a2d5d1463bbb9aca1bf505d1c310bf61f6d281f
+  │   │ da3cbd1bca298c006f9900b6e8efb9ca681ba792598faa19ec64c2b61b2bc138
+  │   │ dc929dada05a4abc1f0c4ea162ec500bd219c5229ae1dd494998d405a3a1ee7a
+  │   │ b32ed62acf4467ec5bb4cd48b4ee154b24ad0161000d4e107292b18e9d1ccae4
+  │   │ 83d2a5e9f65f17a95713a150444e4827d0eb8cb43d26259379262cc35484a1cf
+  │   │ 85985374d28e362a21f596b5486a0fda9638c3ac0c53abfde3d81657c7196cc0
+  │   │ 4015d67aa135bb571c24b60e07802fdded7a65a2992d9c99a8c00ddaf0d9ac80
+  │   │ 4b38d11fccc56df0e7d7107d98ca7af3a969c746aaa25f5726ffdb36c533e91f
+  │   │ a9e4e888ca4b70c0a7a784d28aae33b0263a4cdb5fab40e8d7400dd129be29c5
+  │   │ ff45e7ab42a1c676f5cd4a8bb54709e7427bba96e2101df8cec14970b1cbbabd
+  │   │ 390ea82826944cb44935b715cc1ef3c88a93f52df6ce8f752c4adbe168f82801
+  │   │ 585bf6f03e702ca7791877c45fc07b9e3123fe84cb7b345f88215f7d095cb4f7
+  │   │ 91b669e3408e9654021cb83d84bca1b423ace01376d209becbc14c44b346bcfe
+  │   │ 8b65f8426f6047ed331a0a68654526101d547956d6bde862ad0b4028941c676a
+  │   │ 14a3f56591af225b9880f32615ee907b337ea0ac5fbf93584d82be896f65eb41
+  │   │ 7d36f5a7a176c53c2efe1dd81d768818aa6ef6dbbac89d41137f55ff6a6df5c4
+  │   │ c46abfd212497ca8649f0caf3fa206dc566a6f402228f2b0ab54ead54a7e4e46
+  │   │ 3b7e487acebf0e87534d04534f7af4343e3e905c489585bc2f36fddba5455d86
+  │   │ 3a0eb73654294d4bdc6a66340042475a0c53c1d97123c55ee548349f758d5fd3
+  │   │ d1f9646ce8991f8800f5a98d00ae0467b26da1c8b40000a849a365cceb5f566d
+  │   │ fcfb818e1ebb5635d90e78a5655a7b99d90a473e2c7ad76944e825696dc5f1a7
+  │   │ 21f795acdc25f090f69cea09bc8abb7d56567757acfbda2a87f9dc55c91946ac
+  │   │ 993ad5a05dc84bf6377c88977a4a0dc607c059b07e96fdcb8df63398cf7cdcbd
+  │   │ 7ab524d6aa2760bfe1b778c7139133137240502cfe03072ba51d44fd15f81bc5
+  │   │ d9bdbb35d11c1661a904a47633c735baf96395e33b33a6aa7bf517bf2aa2991a
+  │   │ 02f1c2eb83f59c733968cbcd7879d1fd6a9f37b8d9052c36044ead0465d4603d
+  │   │ 121f6057be7942c7fa43c18f0c4463b8c46b03f9deaf560cf5eb02efb778f92a
+  │   │ af2cf20bc3882e17f9a7b629c9458a21f1149f036ab1dc8feb14fcda5ad1bd71
+  │   │ 7994c7231f1497139f91a60ac22a70f124e697d4792f9ed6f8123d3d4b5258ba
+  │   │ 263d37e9ab626c671c17dc7fec05dd9e56fd2aba8e79cbddd49f550b6f1f21f5
+  │   │ 385837da8f5544f6a2a4ded0d5cc1c324cecc25f67a377f37814a2e2ddc8db78
+  │   │ c0cbac8f34474e549425a343733d26d46105c7c9bfe2345d86cea0ecd798391c
+  │   │ 8e38cbd1f8d10cb47f3308e01f1e3a755f34a9a10de0c4ea921124d2309c4046
+  │   │ 29877f9c9ae54328617523957de04f109d44e4c1ae84b643fae9c6b59adbb454
+  │   │ c5c4e584c7814c92c1d72de36bb55346cb437fa2177191a3216e4ed7b4f96096
+  │   │ ad10dbad4ed9480714cdb26a21486a343bff457e0ee70d1662ee66ef03c5dcf5
+  │   │ 4dfc1de46245863e0a5f83174a9d83ff9ab3102d652c9980ab55d58c32fc8d23
+  │   │ 469bc31712ca88b68cbed309489d149e377d7ca3cbdd27305cafd6c51a024166
+  │   │ d41a0057faa02a07a4fdabb6708734338329d9d59769fdc2b06c71db0c98d200
+  │   │ 6b6884b32d0bc84f864b16b93b7ede85909c3d376d3496bf24805a8f9da756f1
+  │   │ d344d0e92a8974e93461d85428e90d225d7a6066f92e000c62a40ab2d4d374a0
+  │   │ bbed5920aca9451e91c01277717c79a64e2293f933a69045a694745f0f8b5b43
+  │   │ c6a62c04c4c2ba04b88bd10d34d53bbfd8bfbfa093d1a97863151262026fe342
+  │   │ f489d1269d83b12b79ed6e783470338f41eba0360a2982a03f6ce877389635f8
+  │   │ 3ea1fbeb9078785a05c678e022d02851fdf8ffbc4bbde588025f35901e59bc30
+  │   │ 429eff94a8c2f3300a9b78f5cdaa0f17c12e1d1843907a97a3e1d49ea04e7be8
+  │   │ 13a0c7b1cbc4b5a1509c1cf803cde4af313bc097b5283dbfb120983da975b909
+  │   │ 1347fc80fa8bf6a7f1cface364d5afeb2dfe482183722d9e8689d2f3cbd48584
+  │   │ 59697e0559709dfaff6a5c394d41276de672e6d81e960854ad90db1a63eee02a
+  │   │ 210edc0e7fbf68cb069b961b8d5481f6625d805aab112aae885b472c491e1d3e
+  │   │ d8df14fd8f49da4bf3f02781b60be9de935c087a4352a94c8e378b995a29a413
+  │   │ cfa8dba26dc73e9dd3ebfb6ae58b92442487cdbf99252dce7624d0632da59b01
+  │   │ f0a0d079eb621661a11d2ec629ab5a6ccdde533120a07f951466bc114f3f7636
+  │   │ 525c5cc7ff8c73e6b4e3150d307c4d8bcb03b18bb1d8114cefc0e8790a84bde9
+  │   │ 915d8030b558834622de751ed40be3d875fb770740edbbf8dc57e54efc410973
+  │   │ 16ce190b5eb0b885a4b8e49ce53ffbaa6207f418242266a34aa079f6bebea631
+  │   │ 27e7236050c60ffdaff3f2655031a89d115da7289c32fe6a49fb813477db2536
+  │   │ e5fa177f82e0686953795e13151506b606e909e4804104d99720d31055903d92
+  │   │ b696939e274bf628bee30e0315f37840647c4ffa816b94f31f52d1552a11e22e
+  │   │ 58618e4cbdd7692e872f2d813661ef9fe9618f398dd211cabc77308ec013616c
+  │   │ 5bff29e3abf625d02932b951d1021bd9e48fc2a3a91c7df3fe1b2cb08f545ef1
+  │   │ 1c6e7328eab39bc92801818c38c25ff77ecf088c93cae11bdb76b4b108a54c68
+  │   │ f8c9a94ba3e7b6780f0bd08cf86a48b777930259b9aa5f0d20e1e1b9f037a505
+  │   │ a731f0bddba3c4add1782787a2f0b5ebcc28402c477404addb718b1f5a4bd025
+  │   │ e389c9058f73d918f0f51caf30d0784d912f7fb857db0a4dd78914a72da17765
+  │   │ 172137967c9f4c24ee37acc44934ce7f4ac583006593149bbb912600ee2f10de
+  │   │ fd63397c42bf35ade3c2fea7936e659aca4a0038d3e9dd1718df5e59e38fcc26
+  │   │ d17116dd4181c047a059c9678cc18995d25d70cb5917718b3443b49f029a31c4
+  │   │ ae4a008d1fb48f4b6884272b62ef1ff130e9c7d2f8dc064bc9a1f852daa308a4
+  │   │ 2755daff93b2fb07da61b7d10a835f90cefe22649f83d2f00b92557db85bd195
+  │   │ fb9d462abf073e510df65d142119d2e31543e9c6d1c753850ab5ef2c294eb5e3
+  │   │ 66771517d3750fb8e7e86707530174bce013c4679825406b39253fab959b1dc2
+  │   │ 4c6dad18c72af614b02acce20c3ebcc744f12d60760a751b0a9baf4cc2bb0506
+  │   │ 7b7d8a55c7f152fa4e3e58a4510eea3348e8aa2ce309375025b0f774a45cf6d6
+  │   │ cb437e63104be67bf3b5729475d01f82016db9828c34e487e6ad9d59ade4117b
+  │   │ 4eb119360bf3a1fc0cebe0a303d559ec3600086c873aed21434ad2307e3ddb25
+  │   │ 2603440642d1833519ad4ce4e12fda13f576448711c26266f1ecadde1a2606cf
+  │   │ 6c2f2bbd3ac1f81465516bb14bb9611fd5670f3c45810bf7d8d1fcd3236deeb0
+  │   │ 49a3c589348f20543a610dc619de3979a5d56ff16a44eaebad351c6b78f6ae36
+  │   │ 10905de3107fe71aa34d2146f9ec6d2492333d686638d84896ddd96d2483fd2f
+  │   │ a92fe187013fa1b4763433063d35c94bf98af31d5157007d84c2b48ac7f7fd16
+  │   │ 28683a36ad4a45773cdcc4a6e01323d25856d8b25b566b962c530ab3ac8ece45
+  │   └─────────────────────────────────────────────────────────────────────┘
+  └──────────────────────────────────────────────────────────────────────────────┘
+
+  ┌─ GENERALIZED BULLETPROOFS+ (Range Proof) ────────────────────────────────────┐
+  │ Proof Count : 1
+  │ A  : 007d78ceba7218951558e4080d411777672fbd26def89d4cbab4c810a7a68205
+  │ A1 : ba61c9982db16e6c47ea9570769a97501ea76b4fbd741bebf51d69fac9dbbccc
+  │ B  : 1caf84e4ee0fe783e495e4e0e142b2ecc90f1b512b8f75d6ed261ad3400b4e7a
+  │ r1 : 433631dd48b78719030ffdc1731d8a05247f7b2039a1b5c4a4a838de67e9500a
+  │ s1 : cde1354db89c53389e45503e023a3d7625cfe4fbdb0d280777ca89d7c1726f06
+  │ d1 : 0383b31da356f1ffa9c4c0f798d2d7e02fde5ec4419defa8da10bcf2fe6aaf0e
+  │ L (7 elements):
+  │   [0] 0bcf50bf4885eb2801bc69eadd7a26172589732faa00308ce2e6913ed01e8e28
+  │   [1] 025f33817a6cb4dce532161017105a4797fdc5c410a393c81ace3c3abc197e58
+  │   [2] 2da5938116c79646f97cb331a0b07b1acab278fba39f8367b9feb3f3ecf6b53e
+  │   [3] 0d016b017842b1af48839984bed2ec491d9609d36c1c7f212b6f4cd59f7d6be8
+  │   [4] a09ecb1717e5e1f40c8d904193c3d32453211795acea83d005a8b31af1fd79f2
+  │   [5] 3fbc9b0c4b1e2260fd3a48f95d2bdb3e2b9eab443d41bbed21abfd98c159b8fb
+  │   [6] 998adbff3e9d33c3da5c9238d921fb5e6d904b487364ded82ddca63c29dfd9c3
+  │ R (7 elements):
+  │   [0] b68c93c6ba20e7f52174187d68355b7028e48bebaa89ce46c17e5b707220b0ff
+  │   [1] 68e7917f18e9faedd0c471907205b412ae02df759a9fe6228350823fee297a47
+  │   [2] f6bb23032eb1fd5e231044212069b03225dce9e5f717bd17cc550f225e296c6e
+  │   [3] b89bd6ebb9900b8662bc07ffca6c16c5c50309b7609da341876f4763ba86ea80
+  │   [4] 8db805791da9c7743f2356d277ccdacdd4f282d52cafc89db7a1c1e1d2aae387
+  │   [5] 5a94579ee37e44434d3e8c28f3574e14f45d92548cf9d0f08b64f1a92cf6f7bb
+  │   [6] bdd61ea18e30ad512ca4043c25ac2eba26d2833be441d21822dc8f0c46c33954
+  └──────────────────────────────────────────────────────────────────────────────┘
+
+  ┌─ CURVE TREE STRUCTURE ───────────────────────────────────────────────────────┐
+  │
+  │  Root [Selene (C1)]
+  │  5db358d2ad4127e9be071d56f79e5d053b653cd8d11f8f1f...
+  │    │
+  │    └── Layer 0 [Ed25519 Leaf Tuples (O, I, C)]
+  │         ↑ all chain outputs hashed into tree leaves
+  │
+  └──────────────────────────────────────────────────────────────────────────────┘
+
+  ┌─ VERIFICATION PIPELINE ──────────────────────────────────────────────────────┐
+  │
+  │  Step 1: Deserialize FCMP++ proof blob (7673 bytes)
+  │  Step 2: Reconstruct curve tree path from proof
+  │  Step 3: Verify tree root matches consensus root
+  │          Root: 5db358d2ad4127e9be071d56f79e5d053b653cd8d11f8f1f...
+  │  Step 4: Verify SAL (Spend-Auth & Linkability) proof
+  │          Key images: 1
+  │  Step 5: Verify Bulletproofs+ range proofs
+  │          Proves output amounts ∈ [0, 2^64)
+  │  Step 6: Verify pseudo-output commitment balance
+  │          Σ pseudo_outs = Σ outPk + fee·H
+  │  Step 7: Check key image uniqueness (double-spend prevention)
+  │
+  │  Result: ✓ VALID — all steps passed (tx included in block 1)
+  │
+  └──────────────────────────────────────────────────────────────────────────────┘
+
+──────────────────────────────────────────────────────────────────────────────────────────
+TRANSACTION 2 of 3
+──────────────────────────────────────────────────────────────────────────────────────────
+  TX Hash       : cb07430c2c893922739325261cde02dbf5e9dda857767af69e06f3078b9986ee
+  Block Height  : 3
+  TX Version    : 9
+  RCT Type      : 11 (FCMP++ / Bulletproofs+)
+  Fee           : 2500000 atomic units
+  Offshore Fee  : 0 atomic units
+  Inputs        : 1
+  Outputs       : 2
+
+  ┌─ INPUTS ─────────────────────────────────────────────────────────────────────┐
+  │ Input 0:
+  │   Asset Type  : USDm
+  │   Key Image   : c11742aac222aa6b8080d936b7e6ca32d98f6ee1eb8c67a15ef0ead199cc9591
+  │   Key Offsets : [6]
+  │   Amount      : 0 (confidential)
+  └──────────────────────────────────────────────────────────────────────────────┘
+
+  ┌─ OUTPUTS ────────────────────────────────────────────────────────────────────┐
+  │ Output 0:
+  │   Amount      : 0 (confidential)
+  │   One-time Key: N/A
+  │   View Tag    : N/A
+  │   Asset Type  : N/A
+  │   Commitment  : 11528a7c4fe4113d81d1d6d044066751cfc6a082317037ffa8f639ba56690f90
+  │ Output 1:
+  │   Amount      : 0 (confidential)
+  │   One-time Key: N/A
+  │   View Tag    : N/A
+  │   Asset Type  : N/A
+  │   Commitment  : ab8e2efe34a2d4af0ca31ab2a954492274357e4bf4707937357733f628ca190b
+  └──────────────────────────────────────────────────────────────────────────────┘
+
+  ┌─ FCMP++ MEMBERSHIP PROOF ────────────────────────────────────────────────────┐
+  │ Tree Root Type : 1 — Selene (C1)
+  │ Tree Root      : 3cab5622829bb9e4d7dfb409b0addfcc0d2ea32d2faffb896e65521feaccce4c
+  │ Tree Layers    : 1
+  │
+  │ Input 0 Proof Data:
+  │   Key Image   : c11742aac222aa6b8080d936b7e6ca32d98f6ee1eb8c67a15ef0ead199cc9591
+  │   C_tilde     : a710a7184659d4f10f00c44c150b14028e5bab008f9853fa0dbc39ab6906a1fa
+  │   Pseudo-out  : 125f0f622d4383e5b879bf5677807950d938e3685799a0fc72a999e2b24034c3
+  │
+  │ FCMP++ Proof Blob: 7684 bytes
+  │
+  │   ┌─ Raw Proof Hex ─────────────────────────────────────────────────────┐
+  │   │ 82e655e557b47affbb25507f4d700a86032537f9ea0b3c137de8d8f4997fb18e
+  │   │ 43aeb52b965924f0e6a1172eefe2fcbe50cbdd38dbbd9dacb5599a2fb50e168d
+  │   │ 764c62eec356e1769de51eba4f1fa9f20c2562df4c1331f6092bd9f4446586da
+  │   │ 5b010026408ba45d4f2d8b26686329fc946df59376f543dea9da9a5de04e5fb7
+  │   │ a39621f36bf14eba639bebba0f1ee6fc764b423c38692095e97986c61a853f8e
+  │   │ 5acde0ef257d0a260332b9dbd37f550828f1cd5d4bf431efeb249224759dde2d
+  │   │ 7e5333f1435c7c17dc5a3b40e7e2c01a88847aa56d1297ea08f42c98b79be186
+  │   │ 415e5cfc8acd909aac8dd1f9ed9c23ecac30943ce20e5b6fb226fc1769e1af9e
+  │   │ e24e09f1f12a4c5bc04e30e5ac79c08e2a7f7c9db4926cb9d9d4e780f80a42f5
+  │   │ 3e992208ff0af39898a89a54d046f3e91465ae6ea0c8a062f84beaa18f41c000
+  │   │ b792804391d69297ec401849d4757362d276439589bdf46beffc51fe3044ab01
+  │   │ 04db33e277c10a661af599b369894a144688316f0de5d3247cdb1e25cfac050a
+  │   │ 9e2c5c7b056e0874c3508b40fbd7af3549e6588956173f32803a42d90a9f0302
+  │   │ e86ddabcda56c2441fede7a83c883de7baa5706625a6d8d52293d861cb105e05
+  │   │ 03876fadb12c47d8161194defe267b5925dc68915990a0544813744d7fc7600d
+  │   │ 046373a375ebc82b3ffae5e8ce833bb2e2d602ef28be511d8bf37ef9f86f2b62
+  │   │ 210ef188ce7b884b4dc0f7f89a6ee7bb072d2cc94b5938fd4d2b4e72e4b90ca1
+  │   │ bdb20cfa6392fb9584b82f02e0c06f9120b6b74696fb327d8add5d23406d0201
+  │   │ ecebdd761efe5f13b181abbd4d2d3b5fc0460f9e7e59d765fd92cbd914eb2667
+  │   │ fb3166d24ac0a6128c718d06e123198fefdc1d08f07179cc11756018109575e1
+  │   │ 42ed8e37fa4d40adf874512ed6c9cc4e3d7b677ece56987bdef5219f62d1b446
+  │   │ af166259c62266335a78bce0a78c6349a8911628e4b28b14989fdf5e18d95749
+  │   │ b0824c05b3c7583470dce384a8d472c4db6f03f976e7735bcd03b40c8369d85b
+  │   │ 9a8e6094126cee0d5f522fc51942d867fc94c31ebd238b6e1030b828706e7c28
+  │   │ 64149de17a0f7aff1297dafc8de451d7c59d07d655bebbf8a67d6306bf7b37ef
+  │   │ 684b82a5b7ccd5bda52b5c80ccc8aea0cf9eeb6c68657339c6c008df6ceaa0a5
+  │   │ d58e63874a1e5486a8c92b030db038177773cd973857d90071ff548314febe8a
+  │   │ abc5f36b87d0d3386149f2ccc8a6e1fee211c6c82c36135805f4a723d111f2d4
+  │   │ 586178241402bee4651e6732d900a9641bfdf52590c5c73be781e5828f985a3c
+  │   │ 2ed32c108f81d3663ef8b2451b76a122302fd40229bf85d1dc4d3564d2f3de85
+  │   │ 75ba1ae7e16e605ac9fc1fee8eab83453e5d092b45b71c158539e133eb060ab0
+  │   │ ae08b7c3bf2cb94a1e3e12ee063890031492b6fd4dc382bb067fbefbac29e307
+  │   │ 8622d206f1a46aea3b14fc9f2ab9fa476c8bc1b458a4b319e5c17638b813543f
+  │   │ 2948da745b48045a9ad6373649b4937220619c2f12264916148861b44039e9dc
+  │   │ e164e5e1170bca20671b721b28a2484d33af4c6b908e143258337fcb7c3d34a9
+  │   │ 20d3040cd4db2155ac86d392b93571ac4efd3c16eb12f54b9b7952dd5d480bb4
+  │   │ 374e290dadd931d054828fed21cf561fc18cc4398bc727dcfb75ee5063cb35c5
+  │   │ 25d7ae8a3c081f635756a65cb6df6a85f489f3b1a8c95a1fb303961c464a26b8
+  │   │ 722fe5b846c0ce57ae738819416a39b654f184c669ebc1d329aa37da1356bbb4
+  │   │ 8efb60bf02ec9c8102e48f072d02d68797e3b93c92b8efe393313cd31e8597f3
+  │   │ 1e45857508b6f2921726daad97c50eba4b06afc136582211513bf398f3b1ef9e
+  │   │ 74f5ab9a1535eafbd86d707679163a91dc25f853eace8cf995e94465d251aac9
+  │   │ ed06dd95a467818613f369a6d3bdf25589981829defb1d2856c51c5c681a6c77
+  │   │ 2175c2af22138d1285279f11c166f8c48e281aff984fdeed478805eca6f63668
+  │   │ 087c39df70a0f2ed04da7b8abdf4f0c3da5d43c5e21567eb4e264fee53c32148
+  │   │ 6d49ec3215724c4d3884f3e4b4f4cd39da308a76650d1c5ee1520872916195e7
+  │   │ 07b386c40a565409e2e2831588e8bc9c6edbc88247005749dc711a8afb1c0b80
+  │   │ 5e3ad0f52eb895e522f228167ccbbe263ee166fbbd092cd3137d5b5e3353e4af
+  │   │ a354fc0677c766468f78be6f55ab865054c61160d25c3cd90fa92383d06f3669
+  │   │ 5fc4447c511ffc62362449881b031f9c5f75a48f25a1c5db31e219e249c108b9
+  │   │ 2d87e8a5cf38e8c2e5ddc183b71033c4e8e33900501ad41e0cb53a3d8b283924
+  │   │ c93587e198e29c1be2b08b78fd13a1ee4ba274579cf82a11d91b3152bad8aa56
+  │   │ 3bb79f7e1b259926ea41ab2e73471783839b6f7a1662399b50817bc07a070b33
+  │   │ 0887d5a95699f84e9fa05c90d790c74480a3f592472d353a63c2b1ef7ddc4310
+  │   │ c7f35b47ddb629104e814fa9734e6cd70a83cc51c4671a23266dc33d4aa2f45e
+  │   │ 3b1cd4b2b58b68ef31516b8d699e457d377f5486988bc11816f411b9659add10
+  │   │ 6a7a0650de7d77afbb74bb5dad7bc7b1be28aebb88df0b24d6270cd58ed5df68
+  │   │ e5bb8cbca797b0289621bcde999693308835f2dba1adf3d0f515ba69d9e30eb9
+  │   │ e71bd3775d81188fa794598d2643e3c7bcdc2abb752e2f904b8e9585b1a63e09
+  │   │ dc39a5de3c62d1f8dc9e70ed9c4767ed9ce2bd25c1ca4625c5212a79c8d3dadf
+  │   │ b287cf1414635730e043b82d47f10edba47f34377b030a53ac01d3cc92645a2d
+  │   │ 15c22ad6b9b107a7bbb8812e0604c2955c80ca618d768978384aa3b6bbb7c564
+  │   │ fc333fa117f0f5884c27e84f8194eb73d178c3d06fbcbdee7666bb3ce5869fa6
+  │   │ 2234b4bd929396fd1fad2455ba53c6f0302adc084c1ad8fc47a845d0e1de7064
+  │   │ ee8a6235e06427bdcfa5e9d1892d8b734d37020fb60a34edd48c5ea55fc74abf
+  │   │ a35e826f0d8fc6afaea539a25f87cd2873071f140be0729aa6307868eb9ec783
+  │   │ a600f2210051fe62730b352a738827989a665e883b5d094c2e0d191fec896e22
+  │   │ f2d8b9407d0232dcee25ab7c1c73da51273b24214b40fa6d6c76212fc6040e94
+  │   │ 0d9b6f8a24a985a9bd8dc2660a87754ceead259505d44a44fbd54a5a6372bf8d
+  │   │ d7769664a459d22d93f4e3683ef2bf800f591e9ad994a9e84ab9c8efbbeda6fa
+  │   │ b26e83bb4127e68a6acb815288ae31dad8036a4a8333008d06a442b654977dca
+  │   │ d41180eacf83645a075e61f2a0265598ea51f0eb4711468f33833cdd0ff7c96f
+  │   │ 96ef019c2a063b8ae2000c1c41d2988e037383f9c31ca976508eb964f05fc911
+  │   │ 8a6bff9887e2141baa916f86b531ccd50371b48798567bf881870181d2ebe168
+  │   │ 852928b46acbd0968a594e9bfddd7720151c386860ee80f265eabceefab67653
+  │   │ dcb2dfd27e19e2d537cffe41eb81edbc5285b1ccef1a48ab618774a58946858e
+  │   │ 74e5989a5d854f3401eed5b2c3185bdb31527522033fd2369d24b57145e9778f
+  │   │ 736fe2701fa894cfd78ac630d91c7108074d277bec54348d95d94fd219f3716b
+  │   │ 76b4ddb36794a464ad1a253dc58ad87d43c6617c56021cb99840fe5375c6f6cf
+  │   │ ffc482272cada25550840dfd76efd2189c73e8dae172241e4cbad695c9addd73
+  │   │ 2ee42740fda315d3b9d75142ac906cb352c1388037eb9c08d2e75281abfd4a7a
+  │   │ 097ec22ffb7efa1afca0e1b4c578a304e592f5cf542f6b5995dbd758290522d8
+  │   │ 578349aa83dc30e4ac3e6902ce1449c0e12b4cfd9c7085bd895c4fba40d18c30
+  │   │ f1a097cc275488346855a52b5f73462a31734df134008b8d81ee553d7edbdc47
+  │   │ 5f91d4d0288ee3d49de2eb06b00d4aede779f8719aadd97c877ed274f71e0b09
+  │   │ 7444ef7663878f1a476fe7a735ceb789255041b55370cf94a7dbcd5f00f4fe47
+  │   │ 9ef6c88abccf9bc91acfc4642f2a48d744a2b40bd56a0c5b63c48d5879458d4c
+  │   │ ddf1c65c24aa9de2bb60c2e2bcffd4eb89a900ad313cd40ecdbc89aec7fcdc00
+  │   │ 99be02488cb020b333d058e3c99d08a0d6187e13e8e322eab4874a1952563f92
+  │   │ da2fee9d2da889e1fdb4031a7b08bad204e9be6f630cf99ab478cb9b37189b7a
+  │   │ 3d6ae4b41ff419da008231c3c294677eed7d47592b75bc40a5e40bc591bc9f7a
+  │   │ 1f4dd675f67527a8051ee224872befdaf79bde2d44ab83b852cba0bb894e00b0
+  │   │ 118d9d2086ca6d9a4fa974598bb99de5781eed59020928c9e1f04667fc3e6ea2
+  │   │ 1c938140f95917197f7c15f582e03d97bad3dd7b099c0ac2b50dc3200a89f5d7
+  │   │ 2eac96ad229e24e3fe31b2a2a36a5999d42800c5e1002ec4cd4230230833d47b
+  │   │ 2df8e1fb8f31fd44fec36f7e037806fcfc27d9fe44ac2c66e2bf34052e744416
+  │   │ ab9e4eded2aa9af205b355dbaa8e7d711e85840c8fc18ed6f20f013410bee1c5
+  │   │ dd1aff440b4fa641b09570f5b300056398dfa8b771f8bd21d5a9aef11eedb682
+  │   │ f8e978db07c02dc82a777bc02bfe09ab946ac2eb25274e162579fc49a1670262
+  │   │ cb75c6ceebf0ed0ff0bdd1c79351dd48f88cacd55fcb511b47e4a7ae4345e9cf
+  │   │ b67e531e1cdc39ca011e56cc6179534e39ebaf340bbeee99a008c912b2ea4420
+  │   │ 5686bf51f6eda162f460bead3d1907ef3ec7b2b489c5db104f250bcbe1c5b02e
+  │   │ bfd67b0f1d757dfe22c1cd9e896e44e9241c19a007e20cb4c74aa34352510b0d
+  │   │ 974ac3911f014e0775fb42a52f0bc9eb22347ab6a137729203144554ec52892f
+  │   │ 87d917362bf50de5efd761c872e8e88fec3ccf9f19cb04cd9bb8f2890548b72e
+  │   └─────────────────────────────────────────────────────────────────────┘
+  └──────────────────────────────────────────────────────────────────────────────┘
+
+  ┌─ GENERALIZED BULLETPROOFS+ (Range Proof) ────────────────────────────────────┐
+  │ Proof Count : 1
+  │ A  : 96eb8c95a06e53eac538cbdccd0c7de476fb645a8fe0e97dbf7659681362ab50
+  │ A1 : 5c35b9501a46e054e5602fcb108fb75f0e01c3acbcf21fd5fb377b0218b8e734
+  │ B  : a7db551008c49dec97cca70bafcb82852a11f253e349ef3bb471b67e4c84cb9c
+  │ r1 : 1ae64bf9573d105906cd8581f6985b5ed06d98d9e5f8c4ad6927de92aa1c4d0e
+  │ s1 : 7e6af22e16ee5b2d011767fa9478e695c58cf98f3b30f3c98cb6cc0ba11ba105
+  │ d1 : 4dee9fbaef2fa71f217fb1f2cb83aba81f9ba9166730e3c2ec97f663dc2dae01
+  │ L (7 elements):
+  │   [0] 1a6026503bcdcdc9aa0b94f2cff147fbaf95527bb5a773c07e74bd917c57abaa
+  │   [1] f792a89d388f63185c0133a816cb39e2780df3aaca75ea70f5a2870daec0433a
+  │   [2] af1bd57014667ee64ff048997d380e97c2e88eb1370154744cb4aa9d43eb48ab
+  │   [3] daa358894778c92f234ed9aa029824c6137568f189b59dcfe7aa365022d0f812
+  │   [4] 3e20652b541c8eb6150816be69ebac1ffffcc8f79ae1da5c542f384c517e48f1
+  │   [5] b0af18fbf99f415385cde49ac1fb3a51f0e62589dbb0e7c821e87e0cd09dd66a
+  │   [6] 3f58166a3b1f39835839302df5a0783943c9181cf1fe8f38476bf2f50dd35f27
+  │ R (7 elements):
+  │   [0] 7936f81c45c8a011f4568d1f177a4e99bf5fa77ec3970f7d10f4a324f383fb9d
+  │   [1] 90c9f867dfa98afd465b287042850c56fac258aee25893608b9297299f132813
+  │   [2] dd9337ffe7c2bc24dc91406f520f6bd3a83545608ebf7c42ce828fbfdc6e8600
+  │   [3] 802de845efd6f13f35a6cb6641f03f23e086cef53cb01f6881a9d826c6dde9d3
+  │   [4] 211bab09fee1755f40d3e2aea681b79cbf1939d462ad9e289a17638ffe7176cb
+  │   [5] 64e01b34e329af423d2680d5e3541bcd9cc0957d0cdb1ba30a27af0f5968adbb
+  │   [6] f0bb62c912790a3cfe32d0f69b844d9f8c3e7abe86195d93220f137073e409e9
+  └──────────────────────────────────────────────────────────────────────────────┘
+
+  ┌─ CURVE TREE STRUCTURE ───────────────────────────────────────────────────────┐
+  │
+  │  Root [Selene (C1)]
+  │  3cab5622829bb9e4d7dfb409b0addfcc0d2ea32d2faffb89...
+  │    │
+  │    └── Layer 0 [Ed25519 Leaf Tuples (O, I, C)]
+  │         ↑ all chain outputs hashed into tree leaves
+  │
+  └──────────────────────────────────────────────────────────────────────────────┘
+
+  ┌─ VERIFICATION PIPELINE ──────────────────────────────────────────────────────┐
+  │
+  │  Step 1: Deserialize FCMP++ proof blob (7684 bytes)
+  │  Step 2: Reconstruct curve tree path from proof
+  │  Step 3: Verify tree root matches consensus root
+  │          Root: 3cab5622829bb9e4d7dfb409b0addfcc0d2ea32d2faffb89...
+  │  Step 4: Verify SAL (Spend-Auth & Linkability) proof
+  │          Key images: 1
+  │  Step 5: Verify Bulletproofs+ range proofs
+  │          Proves output amounts ∈ [0, 2^64)
+  │  Step 6: Verify pseudo-output commitment balance
+  │          Σ pseudo_outs = Σ outPk + fee·H
+  │  Step 7: Check key image uniqueness (double-spend prevention)
+  │
+  │  Result: ✓ VALID — all steps passed (tx included in block 3)
+  │
+  └──────────────────────────────────────────────────────────────────────────────┘
+
+──────────────────────────────────────────────────────────────────────────────────────────
+TRANSACTION 3 of 3
+──────────────────────────────────────────────────────────────────────────────────────────
+  TX Hash       : 96123e81c7f26df585eeab540028e91f3999d304123ece76def84c00fbe12a45
+  Block Height  : 11425
+  TX Version    : 9
+  RCT Type      : 11 (FCMP++ / Bulletproofs+)
+  Fee           : 1000000 atomic units
+  Offshore Fee  : 0 atomic units
+  Inputs        : 1
+  Outputs       : 2
+
+  ┌─ INPUTS ─────────────────────────────────────────────────────────────────────┐
+  │ Input 0:
+  │   Asset Type  : USDm
+  │   Key Image   : 9f8ebf6fb3a9d77cf8c64c5de61a80938c4c28fd6967ad111d9cbc39d1d7fb65
+  │   Key Offsets : [22689]
+  │   Amount      : 0 (confidential)
+  └──────────────────────────────────────────────────────────────────────────────┘
+
+  ┌─ OUTPUTS ────────────────────────────────────────────────────────────────────┐
+  │ Output 0:
+  │   Amount      : 0 (confidential)
+  │   One-time Key: N/A
+  │   View Tag    : N/A
+  │   Asset Type  : N/A
+  │   Commitment  : b7620e68290d08e24836f24d0251259e0e240776ae4ee808507a7857279cc60f
+  │ Output 1:
+  │   Amount      : 0 (confidential)
+  │   One-time Key: N/A
+  │   View Tag    : N/A
+  │   Asset Type  : N/A
+  │   Commitment  : f7f014b3bd1c102638ca73c14c02a04dd7ac7914caf4e615e19ffc17f5bd257c
+  └──────────────────────────────────────────────────────────────────────────────┘
+
+  ┌─ FCMP++ MEMBERSHIP PROOF ────────────────────────────────────────────────────┐
+  │ Tree Root Type : 1 — Selene (C1)
+  │ Tree Root      : b981fca6c68174a6f5d2f79d7ab0b7cacea8e0608b989718478921af1290292b
+  │ Tree Layers    : 3
+  │
+  │ Input 0 Proof Data:
+  │   Key Image   : 9f8ebf6fb3a9d77cf8c64c5de61a80938c4c28fd6967ad111d9cbc39d1d7fb65
+  │   C_tilde     : 48f09ac465357bc07c9856a5224e25b6f7569139956044b45ade9d0ace440793
+  │   Pseudo-out  : 5b1a3eb6510272cb4d2164e4534d7d0cc22982851bf8d9b76dcf3afa128488a3
+  │
+  │ FCMP++ Proof Blob: 9115 bytes
+  │
+  │   ┌─ Raw Proof Hex ─────────────────────────────────────────────────────┐
+  │   │ be7a68b802c5ee7efacf44faaa00e385626029a9bc21881bfae84e313afbab58
+  │   │ ba0b76c7a5e6e4b08ff45445f2046056c0037d4b84c2666398ec509adaf2e3bb
+  │   │ c88bedf531553e4bf78b4f1155b0313b639f9ef17587e6499e30f5ee8dc7a422
+  │   │ 7298aeeeba0a5ed275c594f0039791ace97680283262ce16af0067b75ff77a0a
+  │   │ cfd5d1e3d8df82792f40810140d008802952fe047f31997db8ff18be323e6056
+  │   │ fe2ddadced04817f77da86a190f31bff5cc56d77855bad5db7aa71a45b9e68bc
+  │   │ 85a4899b7d4916f5a5cbdbe0b7af1928a5cfe15170ee0069fc3ee7f3026c4c8e
+  │   │ eb1c7d48c47a08791159e13d2c5e3dd5350abd0859c8cbd92e1e1d4edec14c97
+  │   │ f29ea4c818f16a0b44e8a2261d8114119653211c7cfca950c371a31c94655565
+  │   │ 22c2ee4d2cd581ad282d864cd8575a3b254dae1bc42379e5a5da71cb0c2d4001
+  │   │ 18c6ab807be2bc85af623dd8a1d1225785c3f44b30ee77af1447e411921a170e
+  │   │ fd1370cc27447828f77886662a0ce9a7f0d571ce9628a6c7b1e8cddfcbfde508
+  │   │ 13ead7472e0fb01feb00b9307804445a9e086eea3dd403bf02e4208f09204a09
+  │   │ 29ddf17a130f78fc183cb7807ae98f2468bb8186100735cad3a5f0269d75be05
+  │   │ 2ae46a8a7486b295a85db9fab78f51a7f117dbb12e0d5ce14e8f0a7707405b08
+  │   │ ee88fdff9554616d2aebf87a5b544a0f8fd9fb75aad4e4168bbb03cfb1036192
+  │   │ 9bd4969ed746efce683b3bfd07deb1fb69e25e2ed27842d917a83dc1f972e245
+  │   │ 76e5f103050ba9c54d7f3331abc33a9eaeb37b68e205b69285ac1174cf55d956
+  │   │ 7c802eac6836975b57df2be247c2cec7202d36d64756c621f36883001a0e58aa
+  │   │ aedcc40b9d8c5a48552e339a1b4557d708d7eacb33256351dd74b6d85ae4f504
+  │   │ 3745d8f0acfc63aafc317eb977af61d0739cc160fbdcdca4cd73b84410f8a4b1
+  │   │ 6aadad6d49a95b101b9090ed360a1566b68656aae8ec16f0431c0b3107e9b05d
+  │   │ 8e315e263f58ff2b774f03b83b12c00a813f955bba268bfea7aba66f44ad7cf8
+  │   │ 0a4e33af1d8f860087f2250edd54c08ac7dcfc02d9a72874c6849f6e8370b361
+  │   │ 018c4817d51ccc899c2102ab1d000ec16976f81e5d644117ee2fffc7d11712ad
+  │   │ a41ee0faf552cf9b836486894caae5d07626dd0da068e6e67aaadb5e2f808880
+  │   │ f7278abec56ee8f2ddcc85405443924af2299ccabc6e938aae66f5363a1a60bd
+  │   │ fe449ed2f3d22c4d095866ba34fc145f0d72d25b55e9f736226e6016d5010e33
+  │   │ 82e040c9036beca877dee5e30b69bbce98e54c35cdf6c0d0e7b91a7636f5ef1c
+  │   │ f97028396cccb2ca93650763b57ef3fc33246c7abb4ae540a1a91c4797435530
+  │   │ 8ad87c7e4dc989a6eb73438339daa2c9aeac00ca9052531d221a5a742b6e7312
+  │   │ 02984420138aaa85ce6c7ef5d7b4bf892e2b72ae1b5a79fe61d407f190b462c3
+  │   │ 990502f06f1084ded7a23f80a0ac46f3525358b245f4f14a499221621275114d
+  │   │ e110dba9b4ccd760ddb55c23daa2a632f7a6f08778f2289a9bda9e4e8a293a00
+  │   │ 4f3f5fcd564ba2ae7fc425b95217c4d0ccd67de6cb9aaf803e8bd011524e04c7
+  │   │ 3e63d5a0d82920264502a9d30061242d1e2b1dc3c3c261303f5a2aba25ec7ac8
+  │   │ c2da32d00dae7edd544fefc1469fa8a71803fbc41820778cc8fcfadf27f14936
+  │   │ 65ba64226f93a2c700b0937aa6bd1e6280d684bb23ecbc1438da79c24034a931
+  │   │ a72f22b42c887cc59dfded6ce521601a0ea5dcf504a3cd874100df97399b91a3
+  │   │ 54b2765f8cee12de1b7d558ba83b2b770caf08002263f0bf0917cd804839f8c8
+  │   │ f854d22aff97576d3494af22532c36bfff9501f2a289e75cb50e104b388ad90e
+  │   │ e07e09a2fda1706ae93875c5216aa0a793016df5e76e13db3628cf4860910399
+  │   │ 36a76d8f93a11344d040393514eceb457be9652b1789cddb0ad42b82477e2725
+  │   │ 420b26c78fed4e6bc3168a2561b01e227f7bdb5d44daace67c74714439f8a364
+  │   │ 6656a55a55f87dcf7454dce04271751665bd1cf4514361aa0dc66bf3e941ed36
+  │   │ f11fbfd34ab4d59f26e1e61423aca3f90960c9ee1d838af189b8d5ea0bde3b96
+  │   │ 7e59ee0478f8fe5b297507626e1aa3f593067dd331446842afbf6ded67dd3ac0
+  │   │ 65fdfe76ee85a836facabe5b2ecb8d9a76998fa77b747e538b7907102d85592d
+  │   │ 8dac9ea394756d11055832cfa7f1150d8926e90488cd8acbf5b7004e941f42c9
+  │   │ 0117b92fc5ebe222d94af7467fc8456fb975730751933960498ac9f164c573cc
+  │   │ f75a3b2c6ef87098a2ffda53778da67819514d4ad4507732df7d49c70259f250
+  │   │ 9303608f45b2a7350cef9259b189926d00ee185db7b44d90f20d4dd47a04acad
+  │   │ 3b3c635bb3616c05566e6168a7648bd748ed5c2b7e5784e3fa010748d0a694f2
+  │   │ dda72447395e875ee00b33c42fd7ea46b2f4f7266e7b07fbc06a46cfa386b124
+  │   │ b2e86161fd4bf27eb46c226b445c886383da44acd8e08dbbaae6c3f1931b1438
+  │   │ 40f4c925a2b06b3e06d8b939247834b5a05aa146d164098cf63b5586c56ba699
+  │   │ 8c66ffa107bc7188e6384e9e5478d2a4b0e7a3f44ba43aef3775b436201e8d56
+  │   │ 4590defefecf2bad7ae7d40999203644f83e1fa872f8efdb1f0b19fb93e342cf
+  │   │ 93ba1db63ecd052615d3f5da694130a91d44ee807a115b3c6038d125c701600d
+  │   │ f581972822db654d98d9b02497696f0dfb23bc74b21df43cdf1f188b2c3a2615
+  │   │ d71c8c2176ba3569071b1a43afab18febc1c9bbc165bb48028b297ee51de9155
+  │   │ 07a44f58a13e5a6b20a608cb54e18cef285b7ee847ae6441e59251a1788480ee
+  │   │ cd795103a0393ccf7ad535a9a62205e2f404f5bc8105e59647e343eecf2f245a
+  │   │ 92573eaf7c5fbc62b596dcb85140c76071e1f7f3b45a0b9f6b8dcfb14d8b8080
+  │   │ 9b56ec635c18dccea29ea15568a25f92ff60624436a869d0476b7ecab7d25906
+  │   │ e9dcdb290c10defd31945c4a968a6eddd1e63e0e08ec6a6c490b2bd810b4bf59
+  │   │ 1f60a2be8973bbe933811d4402a95894e7121b327f0d0c8822d36c1aa510a312
+  │   │ e423a13078398b9544a240b31a1a5f336aed10c9a73c48f7a13c57548f49831b
+  │   │ 7a27eeaf120f5296606ad590252b975ea99ecbea8a794eedb39a735da1d8aa0d
+  │   │ 84ddda42bd5413ee47d4635f32f6bbdf7522ec2eb43e055be56442a449e79198
+  │   │ 4b64eb345e69c1f18e6e230a24385e72bbbbe962861da9b1f80e49eb43c09c43
+  │   │ 464c8159055f4236c0da954d3a51b7351e270d9868d761179890c0050307e003
+  │   │ 017cb1322ced0e21802425b4e2ff0859f53e77fadf2070487f7fd9c68abe67b4
+  │   │ 0d5433edc9c2011a47df87b4518abcfe78f790c097a08e056d1fecdba1cfa685
+  │   │ 67cefae45c8bc7d7253a4d3837f6e5719219f3868f38d27de5064d50a16b8417
+  │   │ 9379cb0714e71336ce101bc190c361974746f216543642e76bb0081e99b7aeea
+  │   │ 2c95cf3387d73266a01d17df4cf74a17bc633e3cc7b2264cddb309da08520ba3
+  │   │ fd26840dd00476be77099629b5742be4315e11bd70cb0faebb8a0ae440f4a7c1
+  │   │ b23449ec502bdec1ef512e0f7bc9a175dac799e29773bb99a00da0e8970997d3
+  │   │ 59ca0ebea871e6b8ad55a20a2ae3477f1377dc57667c6d36375ff337352e7e75
+  │   │ 02fe7be1de033e5d753d422337ae5a3587edcea5abe80b566f0beff10b698bc7
+  │   │ abb95c13299af4d7ef5fde5176ed0a7b7c572653dd11ba14a5928542315fa884
+  │   │ 6ca0f5bf318b3dd14209f35c31459200207e209410fd3350b7fbaafd20655311
+  │   │ 0a91bad9980c387e710a02fa669d80c61c771cc10e0ca51396c07cdc3791320b
+  │   │ 6a6ea16a16baae6714327a3e69d5fbf14aed69fcf96e2b1ef3788a372842a95e
+  │   │ 11f33bdf78139fda908d89a42602d5a13bbd1f1b3ec695ddc3275c687b288e0a
+  │   │ 2205aefba3d9fa8a7bcc4f2bead205adf738a4a7ef0b215d3899608995724749
+  │   │ 5bd9b50a46c0e3881a02c1c4ffe1efbe20df3cc221acdab0bf7a553849b23d9c
+  │   │ f21eefdfa8022ffc90e44f851a4fc918aafafabd5ab45ba7180fe95538c780fd
+  │   │ ffc2217781f55cda9f5f0274e5f0f8ebee792b7b222f24ddfffdda3440361a5f
+  │   │ 7c7f4568e490fe572a1fd92ff544df8c686665364f1aa1a07b95f275a60bc1d1
+  │   │ 730fa87445080250e2cdb4f8eb660c25428e19b35706eba50b6989aa383414a9
+  │   │ eb8de6cd6535b3f5d5f7d8921be7a6a85db0ab9c702a12e0e642768019ab0dfd
+  │   │ fff53739237455e1412791081532ca9adb7d530e83ea1d53305c771f63ab7968
+  │   │ cdbd82e78a55a992c63a767dffa5fdf9e5bc8ac73f1ae17d9bf089e4d860f147
+  │   │ fd4527fb9021eefb2778691be46f06f6846743b2b6f53e6b670608105263da54
+  │   │ 685dbee655fb2864f8317884e075a909c2d16ac6f7bf0bcb097ef0761c6fd19a
+  │   │ 9660d2e93ca8271d2ea07c165820a82268f9681de094f6d1c7aad83c236a0d34
+  │   │ ef0baed7a28a5f819577cf1fe6726f7d7ea715bb6d22d01352c5c96dbd9b6c7e
+  │   │ e808d3d9468bfdf5b11f2243240e1753d018b199ba3a22d7f33aaf0b29d9d7f6
+  │   │ 85d7cb07a07117f0ea29beecb828b3d3baca23ff7cf930b42af29a2806f7ce15
+  │   │ 3444d786399262b7867d66e9679d4993902d5dbdd5de170714f5971a17d2bd12
+  │   │ cd614a42d311ecb6c7475956105ab0a5c5654066fde4d852aa392e24dbf04e70
+  │   │ 9c63f83285693bc0a9cee4505bbd5499073551efda7b39511fdad081abb97866
+  │   │ 7ea02d0a6d99e02a63cc0e04a737ba31240c926d57e25a899d96101e041f4b2b
+  │   │ 150ea0b328be7bf5972ab6e1d3af5d92ce8c47df5672096838cafb87877e251f
+  │   │ bc4bc4330976f0252310743081430f299b811670738583f2ce17ca81f06d0b4c
+  │   │ dc32a3d3013366357095b1dbb2e05ff3e0cd6860b3ef250fd815c8296c468f64
+  │   │ e931daf0c7ae36f13135d663d63368e5cc4e805cc28f2e0379dd3b197eeae1ed
+  │   │ 42b7efacb1021f17552f12e415e17b570968c4fa614c76a5ec2ce64d91bcbe1e
+  │   │ 022299e4add4061a26e53f4fd70fc827d1ff697d6190223628708d0e1459af1f
+  │   │ 60ed9982bcd1e4aa4fd6904d122c664edfa4aa9e806bf158050ebf3773dc8350
+  │   │ 619a7ce53743e3b933aef0291a5e6c5b82d781401e8112dd160c0715c80a2191
+  │   │ f94dc0f67c8c418fab87c6d8a53987c223a34dafbac3a9a9f0d69978a51baa30
+  │   │ b5830309f3f7b58618bf37437eba5d0f77b229840997144979da516c6744a4ea
+  │   │ 588a8c38e82a7e84519a69a71b9f0a02834ce8ab1ddc3465563afc522ad0a735
+  │   │ 8a34f9ffc8775f2410f02a7c44e9fbb409c1c94e2c3887283efa2144f7302d3d
+  │   │ b28a7fce6b2f9602480afa0413c1777d63e4b90868ae79dcf3b41eb729ad346d
+  │   │ dbc7b8a2765a93b2506988edbfbd4ac104d85773b7c9d79a163f309bb8e5a8b7
+  │   │ 2f9e209692ad91f12e6f4d51fadf3ff2584443e24767b8340a65867a9ccdd6c7
+  │   │ 3f7271b66ba39d55b8c9b4b2cf4ed7278ec41f58527dea1e474856567ca94dde
+  │   │ ae9e4e4628f08645f89d7846ade521c13f07d595e49cf22d19b8d1f79ffb3e5f
+  │   │ 38876f8ffa84aa38b8dea723551ab13bfe13e3cbc643cb1a22a24dbf05fdd129
+  │   │ 62f36def76f5988e62d68824056d5d9f2acabc3edd0682b023bcae89e0e6b7a9
+  │   │ 084240ded3ca902ba40087412cbc1188865262ff4750d907d46b69b42b086200
+  │   └─────────────────────────────────────────────────────────────────────┘
+  └──────────────────────────────────────────────────────────────────────────────┘
+
+  ┌─ GENERALIZED BULLETPROOFS+ (Range Proof) ────────────────────────────────────┐
+  │ Proof Count : 1
+  │ A  : 0491ccc81cdb5b23adea569451de48f6aa9823c27d5c70ec45b19eb1ad8e84de
+  │ A1 : 69f7c5c6f1f34fa4ca8ad56619292859d4ccbb6db56272b13b81f791793dab9e
+  │ B  : 998744926579b4575d2d9db29d966017946879ede5febcb8f603b9018a5b25df
+  │ r1 : a9b308319ab0d0a0d11c31dec11c5682ba8350b0909b32a2c0faf1f4adf41909
+  │ s1 : 8bb28de72a1366e557b4dae070b5fce232693f6914f27fd338f66d89b8487401
+  │ d1 : 64537037431266a794ca47ea79e3f1e29d6784afc8ac27e6291725f76697be05
+  │ L (7 elements):
+  │   [0] 63beca10253b08b99a0a22845813af0ebdf0ee02060a27378ebd258af8b905ce
+  │   [1] 66c311e2bb3dd71438c16090bf87cad9348bb58ca99b4aea0fd26f59a3dddaea
+  │   [2] a17930280feba1c36eea45e852aa1a6075e060c7ab829f35f5ee3a6ce86674ae
+  │   [3] 246621cbba05bf63cded1ac81c78e9080f9376d19c0cf81de653853871357a33
+  │   [4] cf66d3f44816fc9a5c1f19e73e5098cc682f284dc45dfd1bc79128492ecd4c51
+  │   [5] 6973389de3b28ada7f74a2caf3f024d5715c67ae1d1106b8a5a05123c3daf31b
+  │   [6] aee0fa9bf97a463d41374525543b8808e9fb5ce5343424a0b9dc9e4b25178e67
+  │ R (7 elements):
+  │   [0] dca6b7826ae17b7004fb170eac0c1cbf9ec3855b26e1d3fd4031d090f02a6f0e
+  │   [1] af7c4ea3915014a2793537a40bbe809cf4f47232056ac91926659aece2f0abd6
+  │   [2] e8a508aed86f7a614b4092c57845ac201c6f2e344471c9a0f4ace5b6621dd094
+  │   [3] 7634fedef3c6f067135e53c669f212004cb3432f424833178910777423c4450f
+  │   [4] d901c58f1cc1e64bb9731f5c39955f2bb969e03fbc3bcde366634775af868e38
+  │   [5] f2ef2092c3294d40e496bcd4e89b8fe9b1c6b6f9e20b947e2e9e8c850688955f
+  │   [6] 8e1928724abd91e870aae5cfa9a4efb0d49f5130960cd5d235ae3ac98bd69e24
+  └──────────────────────────────────────────────────────────────────────────────┘
+
+  ┌─ CURVE TREE STRUCTURE ───────────────────────────────────────────────────────┐
+  │
+  │  Root [Selene (C1)]
+  │  b981fca6c68174a6f5d2f79d7ab0b7cacea8e0608b989718...
+  │    │
+  │    ├── Layer 2 [Helios (C2)]  ← hash of child layer
+  │    │
+  │    ├── Layer 1 [Selene (C1)]  ← hash of child layer
+  │    │
+  │    └── Layer 0 [Ed25519 Leaf Tuples (O, I, C)]
+  │         ↑ all chain outputs hashed into tree leaves
+  │
+  └──────────────────────────────────────────────────────────────────────────────┘
+
+  ┌─ VERIFICATION PIPELINE ──────────────────────────────────────────────────────┐
+  │
+  │  Step 1: Deserialize FCMP++ proof blob (9115 bytes)
+  │  Step 2: Reconstruct curve tree path from proof
+  │  Step 3: Verify tree root matches consensus root
+  │          Root: b981fca6c68174a6f5d2f79d7ab0b7cacea8e0608b989718...
+  │  Step 4: Verify SAL (Spend-Auth & Linkability) proof
+  │          Key images: 1
+  │  Step 5: Verify Bulletproofs+ range proofs
+  │          Proves output amounts ∈ [0, 2^64)
+  │  Step 6: Verify pseudo-output commitment balance
+  │          Σ pseudo_outs = Σ outPk + fee·H
+  │  Step 7: Check key image uniqueness (double-spend prevention)
+  │
+  │  Result: ✓ VALID — all steps passed (tx included in block 11425)
+  │
+  └──────────────────────────────────────────────────────────────────────────────┘
+
+==========================================================================================
+PROOF GENERATION LOGS (from fcmp_ffi_debug.log — secrets redacted)
+==========================================================================================
+
+── Prove Session 1 ──
+  fcmp_pp_prove: inputs=1 signable=641e4e043ed6b5265b40c1044c6b27eab3e4be3392e3d19fa4b8b5332c37cdb9
+  fcmp_pp_prove: pseudo_out_in0=2a2feae276c23b7a7356cb9b8380a3a7fe91095a3c10a9ae93390712a1a62403
+  fcmp_pp_prove: input0 O=b3ce53b17b8deb98857c293923e626c12d17fca56229e23ca98eed49b362f3e0 I=1c0fc67b7bf8f953de59eee8329c5d2035881795fe849f2b467a238b72aeafb5 C=850cc62dc2f99d77d68b3075cff3f3e7fb7e6b989133931971c4071aa82f7d48
+  fcmp_pp_prove: input0 x=[REDACTED — private blinding factor] path_len=2261
+  fcmp_pp_prove: leaf_index=5/17
+  fcmp_pp_prove: input0 root_type=2 layers=2
+  fcmp_pp_prove: input0 root=608e9d0dd1dcdaf2337b9f34754832d062fc6db4e7f9f0710f4a2a6f4327f88e
+  fcmp_pp_prove: path check root ok
+  fcmp_pp_prove: key_image0=5e83717ec0a704d5acf4ed507a923c7470e059c6bc76f21f6647e8262a6f9169
+  fcmp_pp_prove: input0 C_tilde=612072cb1b55a3e87b629c38796ef6a7cda4433ce43d7ccea402956f07da3c9a
+
+── Prove Session 2 ──
+  fcmp_pp_prove: inputs=2 signable=3b6ab7a3c51b05f697258ab4744dff7956927bea6053f98878cb20aff1f13c3a
+  fcmp_pp_prove: pseudo_out_in0=024f03486575873eb5e25027162f4bcf8a652cb777cabea138a8c0fe871a8e2f
+  fcmp_pp_prove: pseudo_out_in1=774015870c788444e8f97a8bf265e214358f6e87557f195163273ab079d9b8af
+  fcmp_pp_prove: input0 O=b3ce53b17b8deb98857c293923e626c12d17fca56229e23ca98eed49b362f3e0 I=1c0fc67b7bf8f953de59eee8329c5d2035881795fe849f2b467a238b72aeafb5 C=850cc62dc2f99d77d68b3075cff3f3e7fb7e6b989133931971c4071aa82f7d48
+  fcmp_pp_prove: input0 x=[REDACTED — private blinding factor] path_len=2261
+  fcmp_pp_prove: leaf_index=5/17
+  fcmp_pp_prove: input0 root_type=2 layers=2
+  fcmp_pp_prove: input0 root=608e9d0dd1dcdaf2337b9f34754832d062fc6db4e7f9f0710f4a2a6f4327f88e
+  fcmp_pp_prove: path check root ok
+  fcmp_pp_prove: input1 O=47ad6a8e307de01f2da5da4b67f35fe8bd3e83fb431d36736501e202785750b6 I=e2779d0a8334d411f4a535a22eb3568a2133eb396ed531848f192487e59ab862 C=d249429eb97f68fa03aeafe9ec031387d212774617a86a2ec0bb019a76d435f5
+  fcmp_pp_prove: input1 x=[REDACTED — private blinding factor] path_len=4277
+  fcmp_pp_prove: leaf_index=3/38
+  fcmp_pp_prove: input1 root_type=2 layers=2
+  fcmp_pp_prove: input1 root=608e9d0dd1dcdaf2337b9f34754832d062fc6db4e7f9f0710f4a2a6f4327f88e
+  fcmp_pp_prove: path check root ok
+  fcmp_pp_prove: key_image0=5e83717ec0a704d5acf4ed507a923c7470e059c6bc76f21f6647e8262a6f9169
+  fcmp_pp_prove: input0 C_tilde=1163392e504579e4a6df24823477e335bfff79007944dd02d1864f1e9402a0bd
+  fcmp_pp_prove: key_image1=2a66cc283b75f43aa36567c803e5c4f3a75017b3a607232a49ce55c6448dd454
+  fcmp_pp_prove: input1 C_tilde=231b07c6dd64b6fb7fe7a289138f1f4efead8fe068ce3360e636da30ed775b4b
+
+── Prove Session 3 ──
+  fcmp_pp_prove: inputs=2 signable=291acfbed8feb6bd628b6470deedcc9865e558a8c95b0d261f46c93696067a5c
+  fcmp_pp_prove: pseudo_out_in0=6f92ca579fc541f200543a2744371a6d3adc810cff8b5bc17fab2a0fbb123379
+  fcmp_pp_prove: pseudo_out_in1=3877a82b218beba5cddf721e9743e0d1e0531fbad7e55e0baca7b247f4363e54
+  fcmp_pp_prove: input0 O=b3ce53b17b8deb98857c293923e626c12d17fca56229e23ca98eed49b362f3e0 I=1c0fc67b7bf8f953de59eee8329c5d2035881795fe849f2b467a238b72aeafb5 C=850cc62dc2f99d77d68b3075cff3f3e7fb7e6b989133931971c4071aa82f7d48
+  fcmp_pp_prove: input0 x=[REDACTED — private blinding factor] path_len=2261
+  fcmp_pp_prove: leaf_index=5/17
+  fcmp_pp_prove: input0 root_type=2 layers=2
+  fcmp_pp_prove: input0 root=608e9d0dd1dcdaf2337b9f34754832d062fc6db4e7f9f0710f4a2a6f4327f88e
+  fcmp_pp_prove: path check root ok
+  fcmp_pp_prove: input1 O=47ad6a8e307de01f2da5da4b67f35fe8bd3e83fb431d36736501e202785750b6 I=e2779d0a8334d411f4a535a22eb3568a2133eb396ed531848f192487e59ab862 C=d249429eb97f68fa03aeafe9ec031387d212774617a86a2ec0bb019a76d435f5
+  fcmp_pp_prove: input1 x=[REDACTED — private blinding factor] path_len=4277
+  fcmp_pp_prove: leaf_index=3/38
+  fcmp_pp_prove: input1 root_type=2 layers=2
+  fcmp_pp_prove: input1 root=608e9d0dd1dcdaf2337b9f34754832d062fc6db4e7f9f0710f4a2a6f4327f88e
+  fcmp_pp_prove: path check root ok
+  fcmp_pp_prove: key_image0=5e83717ec0a704d5acf4ed507a923c7470e059c6bc76f21f6647e8262a6f9169
+  fcmp_pp_prove: input0 C_tilde=1802dcbb874e4fd1f2ef36579b60a3ea426d6bd6112b34095b91e6b84b6a02a9
+  fcmp_pp_prove: key_image1=2a66cc283b75f43aa36567c803e5c4f3a75017b3a607232a49ce55c6448dd454
+  fcmp_pp_prove: input1 C_tilde=0fbea9c43dc3c6d2f324da9d907c60fd8bf0b7e0d16f6b47bab62ab942614128
+
+── Prove Session 4 ──
+  fcmp_pp_prove: inputs=1 signable=1fb3e69a92cc3b8fcda2573cff7f64dadc6af1e3a3d11b870ae43bcfa326e81d
+  fcmp_pp_prove: pseudo_out_in0=929c32a57fd6079836226fdb4caff48e4ae2ce547953301fc7a3fe7abc8dcb65
+  fcmp_pp_prove: input0 O=098bba4a9f649390f34b3d71aa61702ac14aa14d8bf327fd898f0668fc3063dc I=76c6c97d313bf8b0a686f8a8dd9b7182f924498f7278fde4c357da8c9e4f4366 C=3e06a49db1b5e92cfbdc5264d0bc2f32acb2ead76950701e6e72a5d253c4ea08
+  fcmp_pp_prove: input0 x=[REDACTED — private blinding factor] path_len=4277
+  fcmp_pp_prove: leaf_index=6/38
+  fcmp_pp_prove: input0 root_type=2 layers=2
+  fcmp_pp_prove: input0 root=11e2e8b58b87829b42be854b1f9eaa5e412c54c4f5aeefb9d4cac877ba9232c7
+  fcmp_pp_prove: path check root ok
+  fcmp_pp_prove: key_image0=39d61821ed18fda6df8272336b95cf39ae6db7f43c8cb498a628ca23b36865b7
+  fcmp_pp_prove: input0 C_tilde=6ab6ce1a421f47c9e0eea44610a4deb74839f142b5cd0b4c798b5d61bacba19d
+
+── Prove Session 5 ──
+  fcmp_pp_prove: inputs=1 signable=bc226a00c87f7168895ae1a3079c5cf8dec370a6f590fdff95781fd42a1d436a
+  fcmp_pp_prove: pseudo_out_in0=2d4da9ac760ae062ef37e3b51dd52f14df2fc3101c4bf3b034a91d5c81e4f893
+  fcmp_pp_prove: input0 O=098bba4a9f649390f34b3d71aa61702ac14aa14d8bf327fd898f0668fc3063dc I=76c6c97d313bf8b0a686f8a8dd9b7182f924498f7278fde4c357da8c9e4f4366 C=3e06a49db1b5e92cfbdc5264d0bc2f32acb2ead76950701e6e72a5d253c4ea08
+  fcmp_pp_prove: input0 x=[REDACTED — private blinding factor] path_len=4277
+  fcmp_pp_prove: leaf_index=6/38
+  fcmp_pp_prove: input0 root_type=2 layers=2
+  fcmp_pp_prove: input0 root=11e2e8b58b87829b42be854b1f9eaa5e412c54c4f5aeefb9d4cac877ba9232c7
+  fcmp_pp_prove: path check root ok
+  fcmp_pp_prove: key_image0=39d61821ed18fda6df8272336b95cf39ae6db7f43c8cb498a628ca23b36865b7
+  fcmp_pp_prove: input0 C_tilde=6fecad817bb7e7018597acb55a500ca7adada2aab2bd6843d5008bf0e231a7da
+
+── Prove Session 6 ──
+  fcmp_pp_prove: inputs=1 signable=f65364fee14488753abafbd26b8cf11fd6cfbbd1ff547a50d4c01ac99f8a4ad8
+  fcmp_pp_prove: pseudo_out_in0=1b20998c025be071c76f88e38f847b99cc12253c7829eeb93c061c72a5d861a7
+  fcmp_pp_prove: input0 O=2c88d888825ef3b7dccd5b81fb0baf0c434b857d10960de0ae1d09b24608e9dc I=f5656aa03ac58f24d54c6804a99f11f47c7a64594c95ec9724380df6066ccb33 C=a290df841a0f6fa8b3cab2972e2512642e69aa169c29a0b5b2474c5ed23c3f0e
+  fcmp_pp_prove: input0 x=[REDACTED — private blinding factor] path_len=5497
+  fcmp_pp_prove: leaf_index=6/38
+  fcmp_pp_prove: input0 root_type=1 layers=3
+  fcmp_pp_prove: input0 root=a4289694f0b98e0457b14c5ecf096f3b030c2b377faf2a105ecca16ce343ef1e
+  fcmp_pp_prove: path check root ok
+  fcmp_pp_prove: key_image0=9fba103f2603cc8a9e50ef4346f667486aace073a9fb25c473d546ecf3e31787
+  fcmp_pp_prove: input0 C_tilde=00a0ed22cdb59b567f2b15f6e94ec837356d2ddb2298137c3d21ab652a48ec04
+
+==========================================================================================
+PRIVACY GUARANTEES
+==========================================================================================
+
+  • FCMP++ proves the spent output exists in the ENTIRE chain without revealing which one
+  • Anonymity set = ALL outputs on chain (not a small ring of decoys)
+  • Key images prevent double-spending without revealing the source output
+  • C_tilde commitments re-blind the output commitment for unlinkability
+  • Bulletproofs+ prove amounts are valid without revealing values
+  • No private keys, blinding factors, or amounts are exposed in this transcript
+
+==========================================================================================
+END OF TRANSCRIPT
+==========================================================================================

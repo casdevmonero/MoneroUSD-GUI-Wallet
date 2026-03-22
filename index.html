@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' http://127.0.0.1:* http://localhost:*;" />
+  <title>Monero USD Wallet</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet" />
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="logo">
+        <div class="logo-icon">◈</div>
+        <span>Monero USD</span>
+      </div>
+      <nav class="nav">
+        <button class="nav-btn active" data-page="dashboard">
+          <span class="nav-icon">◆</span>
+          <span>Dashboard</span>
+        </button>
+        <button class="nav-btn" data-page="send">
+          <span class="nav-icon">↑</span>
+          <span>Send</span>
+        </button>
+        <button class="nav-btn" data-page="receive">
+          <span class="nav-icon">↓</span>
+          <span>Receive</span>
+        </button>
+        <button class="nav-btn" data-page="swap">
+          <span class="nav-icon">⇄</span>
+          <span>Swap</span>
+        </button>
+        <button class="nav-btn" data-page="history">
+          <span class="nav-icon">☰</span>
+          <span>History</span>
+        </button>
+        <button class="nav-btn" data-page="import">
+          <span class="nav-icon">⎘</span>
+          <span>Import</span>
+        </button>
+        <button class="nav-btn" data-page="settings">
+          <span class="nav-icon">⚙</span>
+          <span>Settings</span>
+        </button>
+      </nav>
+      <div class="sidebar-footer">
+        <div class="rpc-status" id="rpcStatus">
+          <span class="status-dot"></span>
+          <span>Disconnected</span>
+        </div>
+      </div>
+    </aside>
+
+    <main class="content">
+      <header class="content-header">
+        <h1 id="pageTitle">Dashboard</h1>
+        <div class="header-actions">
+          <span id="blockProgress" class="block-progress hidden" aria-live="polite"></span>
+          <button class="btn btn-ghost" id="btnRescan" title="Rescan blockchain (rebuild wallet view)">Rescan</button>
+          <button class="btn btn-ghost" id="btnRefresh" title="Refresh">↻</button>
+        </div>
+      </header>
+
+      <div id="syncStatusBanner" class="sync-banner hidden" role="status" aria-live="polite"></div>
+
+      <section id="pageDashboard" class="page active">
+        <div class="balance-cards">
+          <div class="balance-card primary">
+            <span class="balance-label">USDm Balance</span>
+            <span class="balance-value" id="balanceUsdm">—</span>
+            <span class="balance-unlocked hidden" id="unlockedUsdm"></span>
+            <p class="balance-rpc-hint text-muted small hidden" id="balanceRpcHint" aria-live="polite"></p>
+            <p class="balance-debug text-muted small hidden" id="balanceDebug" aria-live="polite"></p>
+          </div>
+        </div>
+        <div class="quick-actions">
+          <button class="quick-btn" data-goto="send">Send USDm</button>
+          <button class="quick-btn" data-goto="receive">Receive</button>
+          <button class="quick-btn" data-goto="swap">Swap XMR ↔ USDm</button>
+        </div>
+        <div class="recent-section">
+          <h3>Recent activity</h3>
+          <div class="recent-list" id="recentList">No recent transactions. Connect wallet RPC in Settings.</div>
+        </div>
+      </section>
+
+      <section id="pageSend" class="page">
+        <div class="card form-card">
+          <h3>Send USDm</h3>
+          <div class="form-group">
+            <label>Address</label>
+            <input type="text" id="sendAddress" placeholder="hv..." class="input" />
+          </div>
+          <div class="form-group">
+            <label>Amount (USDm)</label>
+            <input type="text" id="sendAmount" placeholder="0.00" class="input" />
+          </div>
+          <div class="form-group">
+            <label>Priority</label>
+            <select id="sendPriority" class="input">
+              <option value="1">Default</option>
+              <option value="2">Low</option>
+              <option value="3">Medium</option>
+              <option value="4">High</option>
+            </select>
+          </div>
+          <button class="btn btn-primary btn-block" id="btnSend">Send</button>
+          <div class="form-message" id="sendMessage"></div>
+        </div>
+      </section>
+
+      <section id="pageReceive" class="page">
+        <div class="card">
+          <h3>Receive USDm</h3>
+          <p class="text-muted">Share this address to receive payments.</p>
+          <div class="address-box">
+            <code id="receiveAddress">Connect wallet RPC in Settings</code>
+            <button class="btn btn-ghost btn-sm" id="btnCopyAddress">Copy</button>
+          </div>
+          <div class="receive-qr-wrap hidden" id="receiveQrWrap">
+            <canvas id="receiveQrCanvas" width="200" height="200" aria-label="USDm deposit address QR code"></canvas>
+          </div>
+          <p class="text-muted small">Default (primary) address. Use CLI for subaddresses.</p>
+        </div>
+      </section>
+
+      <section id="pageSwap" class="page">
+        <div class="card swap-card">
+          <h3>Swap</h3>
+          <p class="text-muted">Swap BTC or XMR for USDm, or burn USDm to receive BTC/XMR. Uses the local swap backend for pricing, deposits, and payouts.</p>
+          <button class="btn btn-primary" id="btnOpenSwap">Open swap</button>
+          <p class="text-muted small" id="swapBackendHint">Swap backend: configure in Settings.</p>
+        </div>
+      </section>
+
+      <section id="pageHistory" class="page">
+        <div class="card">
+          <h3>Transaction history</h3>
+          <div class="history-controls">
+            <select id="historyType" class="input input-sm">
+              <option value="all">All</option>
+              <option value="in">Incoming</option>
+              <option value="out">Outgoing</option>
+              <option value="pending">Pending</option>
+            </select>
+          </div>
+          <div class="history-list" id="historyList">Connect wallet RPC and click Refresh.</div>
+        </div>
+      </section>
+
+      <section id="pageImport" class="page">
+        <div class="card">
+          <h3>Import wallet from seed phrase</h3>
+          <p class="text-muted">Restore a wallet from your 25-word seed. Data is sent only to your local Monero USD wallet RPC and is never stored or logged. Start the wallet RPC with <code>--wallet-dir=/path/to/dir</code> (no --wallet-file) so it can create the restored wallet. If you see &quot;Wallet RPC unreachable&quot; or &quot;Address already in use&quot;, ensure the wallet RPC is running and Settings → Wallet RPC URL is correct. If port 27750 is in use, run <code>HAVEN_WALLET_RPC_PORT=27751 ./start-wallet-rpc.sh</code> and update the URL accordingly.</p>
+          <div class="form-group">
+            <label>Seed phrase (25 words)</label>
+            <div class="seed-input-wrap">
+              <textarea id="importSeed" class="input seed-input masked" placeholder="Enter your 25-word seed phrase…" rows="3" autocomplete="off" autocapitalize="off"></textarea>
+              <button type="button" class="btn btn-ghost btn-sm seed-toggle" id="importSeedToggle" title="Show/hide seed">Show</button>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Wallet password (optional)</label>
+            <input type="password" id="importPassword" class="input" placeholder="Leave empty for no password" autocomplete="new-password" />
+          </div>
+          <div class="form-group">
+            <label>Seed language</label>
+            <input type="text" id="importLanguage" class="input" value="English" placeholder="English" />
+            <p class="text-muted small">Use the same language shown by CLI command <code>seed_language</code>.</p>
+          </div>
+          <div class="form-group">
+            <label>Restore from block height (0 = from start)</label>
+            <input type="number" id="importRestoreHeight" class="input" value="0" min="0" />
+          </div>
+          <button class="btn btn-primary btn-block" id="btnImport">Import wallet</button>
+          <div class="form-message" id="importMessage"></div>
+        </div>
+      </section>
+
+      <section id="pageSettings" class="page">
+        <div class="card">
+          <h3>Wallet RPC connection</h3>
+          <p class="text-muted">Start the RPC with <code>--wallet-file=YourWallet</code> or with <code>--wallet-dir=/path/to/dir</code> for Import from seed. In browser mode the app proxies to the Wallet RPC URL (localhost only). If 27750 is in use, use <code>--rpc-bind-port=27751</code> and update the URL accordingly.</p>
+          <p class="text-muted"><strong>USDm uses a local node only.</strong> Set Daemon URL to the same node your CLI wallet uses (default port 17750). The app connects the wallet RPC directly to this node via <code>set_daemon</code>. Run <code>havend</code> from haven-main, then start the wallet RPC. If balance is wrong after sync, use Dashboard → <strong>Rescan</strong> to rebuild the wallet view (no local SQLite; wallet state is in the RPC).</p>
+          <div class="form-group">
+            <label>Daemon URL (same node as CLI — for sync/balance)</label>
+            <input type="text" id="daemonUrl" placeholder="e.g. http://192.0.2.1:17750" class="input" />
+          </div>
+          <div class="form-group">
+            <label>Wallet RPC URL</label>
+            <input type="text" id="rpcUrl" placeholder="e.g. http://192.0.2.1:27750" class="input" />
+          </div>
+          <div class="form-group">
+            <label>Swap backend URL</label>
+            <input type="text" id="swapBackendUrl" placeholder="e.g. http://192.0.2.1:8787" class="input" />
+          </div>
+          <button class="btn btn-primary" id="btnSaveRpc">Save & connect</button>
+          <div class="form-message" id="settingsMessage"></div>
+        </div>
+        <div class="card">
+          <h3>Wallet diagnostics</h3>
+          <p class="text-muted">Shows wallet RPC status, sync height, daemon URL, and USDm balance response.</p>
+          <button class="btn btn-ghost" id="btnDiagnostics">Run diagnostics</button>
+          <pre class="diagnostics-output hidden" id="diagnosticsOutput"></pre>
+        </div>
+      </section>
+    </main>
+  </div>
+  <div class="modal hidden" id="swapModal" role="dialog" aria-modal="true" aria-labelledby="swapModalTitle">
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-content swap-modal">
+      <div class="modal-header">
+        <div>
+          <h3 id="swapModalTitle">Swap</h3>
+          <p class="text-muted small">Live pricing, deposits, and automatic payouts.</p>
+        </div>
+        <button class="btn btn-ghost btn-sm" id="swapModalClose">Close</button>
+      </div>
+      <div class="swap-asset-row">
+        <div class="swap-asset">
+          <label>From</label>
+          <select id="swapFromAsset" class="input">
+            <option value="BTC">BTC</option>
+            <option value="XMR">XMR</option>
+            <option value="USDm">USDm</option>
+          </select>
+        </div>
+        <button class="swap-flip" id="swapFlipBtn" title="Flip swap">⇅</button>
+        <div class="swap-asset">
+          <label>To</label>
+          <select id="swapToAsset" class="input">
+            <option value="USDm">USDm</option>
+            <option value="BTC">BTC</option>
+            <option value="XMR">XMR</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group">
+        <label id="swapAmountLabel">Amount</label>
+        <input type="text" id="swapAmount" placeholder="0.00" class="input" />
+      </div>
+      <div class="swap-quote">
+        <div>
+          <span class="text-muted small">Live price</span>
+          <div id="swapPrice" class="swap-value">—</div>
+        </div>
+        <div>
+          <span class="text-muted small">Estimated output</span>
+          <div id="swapQuote" class="swap-value">—</div>
+        </div>
+      </div>
+      <div class="form-group" id="swapUsdmAddressGroup">
+        <label>Your USDm wallet address</label>
+        <input type="text" id="swapUsdmAddress" placeholder="hv..." class="input" />
+      </div>
+      <div class="form-group hidden" id="swapPayoutAddressGroup">
+        <label id="swapPayoutLabel">Your payout address</label>
+        <input type="text" id="swapPayoutAddress" placeholder="Address" class="input" />
+      </div>
+      <div class="swap-deposit hidden" id="swapDepositSection">
+        <div class="swap-deposit-details">
+          <div class="swap-deposit-label">Deposit to</div>
+          <div class="swap-deposit-address" id="swapDepositAddress">—</div>
+          <div class="swap-deposit-amount" id="swapDepositAmount">—</div>
+        </div>
+        <canvas id="swapQrCanvas" width="160" height="160" aria-label="Deposit address QR code"></canvas>
+      </div>
+      <div class="swap-status" id="swapStatus">Ready.</div>
+      <button class="btn btn-primary btn-block" id="swapActionBtn">Generate swap</button>
+      <p class="text-muted small" id="swapDisclaimer">BTC and XMR deposits are confirmed on-chain before USDm is minted. USDm burns are confirmed before payouts.</p>
+    </div>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

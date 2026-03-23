@@ -1471,6 +1471,20 @@ const server = http.createServer(async (req, res) => {
       body += chunk;
     });
     req.on('end', () => {
+      // Enforce node owner's MINER_ADDRESS for /start_mining — mining rewards
+      // must only go to the node operator's wallet, never to arbitrary addresses.
+      if (miningPath === '/start_mining') {
+        if (!MINER_ADDRESS) {
+          return sendJson(res, 400, { error: 'MINER_ADDRESS not configured. Set it via environment variable when starting your node.' });
+        }
+        try {
+          const parsed = body ? JSON.parse(body) : {};
+          parsed.miner_address = MINER_ADDRESS;
+          body = JSON.stringify(parsed);
+        } catch (_) {
+          body = JSON.stringify({ miner_address: MINER_ADDRESS, threads_count: 1, do_background_mining: true, ignore_battery: true });
+        }
+      }
       const dParsed = parseTarget(DAEMON_RPC) || { hostname: '127.0.0.1', port: '17750', protocol: 'http:' };
       const opts = {
         hostname: dParsed.hostname,
@@ -1610,7 +1624,10 @@ function daemonRpc(method, params) {
   });
 }
 
-const MINER_ADDRESS = process.env.MINER_ADDRESS || 'Moz5T2Abptdgu8AoXTkjNibmu5cnLtDYS29tmCUnYamd99oizcM9uLJFniiGiZUzAq3ZSyYyc1ZqkeTWCcR7A3YJR5tkrwS';
+// Mining rewards are restricted to the node owner's wallet address.
+// Set MINER_ADDRESS via environment variable when starting your node.
+// If not set, mining reward payouts will fail (no default address leaked).
+const MINER_ADDRESS = process.env.MINER_ADDRESS || '';
 
 function daemonRest(urlPath, body) {
   return new Promise((resolve, reject) => {

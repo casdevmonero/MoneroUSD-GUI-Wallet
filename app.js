@@ -3,6 +3,7 @@
   const BALANCE_STORAGE_KEY = 'monerousd_balance';
   const DAEMON_URL_STORAGE_KEY = 'monerousd_daemon_url';
   const SWAP_BACKEND_STORAGE_KEY = 'monerousd_swap_backend_url';
+  const ACTIVE_SWAP_STORAGE_KEY = 'monerousd_active_swap';
   const isBrowser = typeof window !== 'undefined' && !window.electronAPI;
   const DEFAULT_RPC = 'http://127.0.0.1:27750';
   // Same node as CLI: Haven RPC_DEFAULT_PORT = 17750 (cryptonote_config.h). GUI connects wallet RPC to this daemon via set_daemon.
@@ -1089,16 +1090,51 @@
     let swapAsset = 'BTC';
     let burnAddress = '';
     let depositAddress = '';
+    let lastBurnTxHash = '';
+    let ownerSecret = '';
+
+    function saveActiveSwap() {
+      if (!swapId) return;
+      storageSet(ACTIVE_SWAP_STORAGE_KEY, JSON.stringify({
+        swapId, burnAddress, depositAddress, lastBurnTxHash, ownerSecret, swapMode, swapAsset,
+      }));
+    }
+
+    function loadActiveSwap() {
+      try {
+        const raw = storageGet(ACTIVE_SWAP_STORAGE_KEY);
+        if (!raw) return null;
+        return JSON.parse(raw);
+      } catch (_) { return null; }
+    }
+
+    function clearActiveSwap() {
+      try { localStorage.removeItem(ACTIVE_SWAP_STORAGE_KEY); } catch (_) {}
+    }
 
     function isCrypto(asset) {
       return asset === 'BTC' || asset === 'XMR';
     }
 
-    function setStatus(text, type) {
+    function setStatus(text, type, opts) {
       if (!statusEl) return;
-      statusEl.textContent = text || '';
+      if (opts && opts.html) {
+        statusEl.innerHTML = text || '';
+      } else {
+        statusEl.textContent = text || '';
+      }
       statusEl.classList.toggle('error', type === 'error');
       statusEl.classList.toggle('success', type === 'success');
+    }
+
+    function makeTxLink(txHash, label) {
+      if (!txHash) return '';
+      const short = txHash.slice(0, 8) + '…' + txHash.slice(-8);
+      const displayLabel = label || short;
+      // Link to the local explorer; falls back to hash display if no explorer configured
+      const daemonUrl = getDaemonUrl().replace(/:\d+$/, '');
+      const explorerBase = daemonUrl.replace(/:\d+$/, '') + ':8081';
+      return '<a href="' + explorerBase + '/tx/' + txHash + '" target="_blank" rel="noopener" id="swapBurnTxLink" style="color:#4fc3f7;text-decoration:underline;cursor:pointer" title="View transaction">' + displayLabel + '</a>';
     }
 
     function openModal() {
@@ -1106,7 +1142,32 @@
       modal.classList.remove('hidden');
       if (usdmAddrInput && currentWalletAddress) usdmAddrInput.value = currentWalletAddress;
       updateBackendHint();
-      resetSwapUi();
+
+      // Try to restore an active swap (for resume)
+      const saved = loadActiveSwap();
+      if (saved && saved.swapId) {
+        swapId = saved.swapId;
+        burnAddress = saved.burnAddress || '';
+        depositAddress = saved.depositAddress || '';
+        lastBurnTxHash = saved.lastBurnTxHash || '';
+        ownerSecret = saved.ownerSecret || '';
+        swapMode = saved.swapMode || swapMode;
+        swapAsset = saved.swapAsset || swapAsset;
+        if (fromSel) fromSel.value = swapMode === 'usdm_to_crypto' ? 'USDm' : swapAsset;
+        if (toSel) toSel.value = swapMode === 'usdm_to_crypto' ? swapAsset : 'USDm';
+        normalizePair();
+        // Set button to resume mode
+        if (actionBtn) {
+          actionBtn.textContent = swapMode === 'usdm_to_crypto' ? 'Resume burn & swap' : 'Resume swap';
+          actionBtn.disabled = false;
+        }
+        setStatus('Active swap found. Checking status…');
+        startPolling();
+        pollSwapStatus(); // immediate check
+      } else {
+        resetSwapUi();
+      }
+
       refreshPrice();
       if (priceTimer) clearInterval(priceTimer);
       priceTimer = setInterval(refreshPrice, 20000);
@@ -1144,6 +1205,8 @@
       swapId = null;
       burnAddress = '';
       depositAddress = '';
+      lastBurnTxHash = '';
+      ownerSecret = '';
       depositSection?.classList.add('hidden');
       depositAddressEl.textContent = '—';
       depositAmountEl.textContent = '—';
@@ -1214,11 +1277,13 @@
         });
         swapId = res.swap_id;
         depositAddress = res.deposit_address;
+        ownerSecret = res.owner_secret || '';
+        saveActiveSwap();
         depositSection?.classList.remove('hidden');
         depositAddressEl.textContent = depositAddress;
         depositAmountEl.textContent = `Send ${amountRaw} ${swapAsset} to mint ${res.expected_usdm} USDm`;
         renderQrToCanvas(depositAddress, qrCanvas);
-        setStatus('Waiting for deposit confirmations…');
+        setStatus('Waiting for deposit…');
         actionBtn.textContent = 'Waiting for deposit';
         actionBtn.disabled = true;
       } else {
@@ -1235,6 +1300,8 @@
         });
         swapId = res.swap_id;
         burnAddress = res.burn_address;
+        ownerSecret = res.owner_secret || '';
+        saveActiveSwap();
         setStatus('Preparing USDm burn…');
       }
     }
@@ -1261,9 +1328,13 @@
         get_tx_hex: false,
         get_tx_metadata: false,
       });
-      await swapFetch(`/api/swaps/${swapId}/burn`, { method: 'POST', body: { tx_hash: res.tx_hash } });
-      setStatus('Burn submitted. Waiting for confirmation…');
-      actionBtn.textContent = 'Waiting for burn confirmation';
+      const burnBody = { tx_hash: res.tx_hash };
+      if (ownerSecret) burnBody.owner_secret = ownerSecret;
+      await swapFetch(`/api/swaps/${swapId}/burn`, { method: 'POST', body: burnBody });
+      lastBurnTxHash = res.tx_hash;
+      saveActiveSwap();
+      setStatus('Burn submitted — ' + makeTxLink(res.tx_hash, 'View TX') + ' (waiting for confirmations)', '', { html: true });
+      actionBtn.textContent = 'Waiting for burn confirmations…';
       actionBtn.disabled = true;
       return res.tx_hash;
     }
@@ -1274,21 +1345,47 @@
         const res = await swapFetch(`/api/swaps/${swapId}`);
         if (!res) return;
         const status = res.status || '';
+        const txHash = res.burn_tx || res.deposit_tx || lastBurnTxHash || '';
+        const burnConf = res.burn_confirmations != null ? Number(res.burn_confirmations) : null;
+        const burnReq = res.burn_confirmations_required != null ? Number(res.burn_confirmations_required) : null;
+        const depConf = res.deposit_confirmations != null ? Number(res.deposit_confirmations) : null;
+        const depReq = res.deposit_confirmations_required != null ? Number(res.deposit_confirmations_required) : null;
+
         if (status === 'awaiting_deposit') {
-          setStatus('Waiting for deposit confirmations…');
+          if (depConf != null && depReq != null) {
+            setStatus('Waiting for deposit confirmations (' + depConf + '/' + depReq + ')…');
+          } else {
+            setStatus('Waiting for deposit…');
+          }
         } else if (status === 'deposit_confirmed') {
-          setStatus('Deposit confirmed. Minting USDm…');
+          const mintedTxLink = res.minted_tx ? ' — ' + makeTxLink(res.minted_tx, 'View mint TX') : '';
+          setStatus('Deposit confirmed. Minting USDm…' + mintedTxLink, '', { html: !!mintedTxLink });
         } else if (status === 'minted') {
-          setStatus('USDm minted and sent.', 'success');
+          const mintLink = res.minted_tx ? ' — ' + makeTxLink(res.minted_tx, 'View TX') : '';
+          setStatus('USDm minted and sent!' + mintLink, 'success', { html: !!mintLink });
           stopPolling();
         } else if (status === 'awaiting_burn') {
           setStatus('Awaiting USDm burn.');
+          if (actionBtn) {
+            actionBtn.textContent = 'Resume burn & swap';
+            actionBtn.disabled = false;
+          }
         } else if (status === 'burn_submitted') {
-          setStatus('Burn submitted. Waiting for confirmation…');
+          const confText = (burnConf != null && burnReq != null)
+            ? ' (' + burnConf + '/' + burnReq + ' confirmations)'
+            : '';
+          const txLink = txHash ? ' — ' + makeTxLink(txHash, 'View TX') : '';
+          setStatus('Burn submitted' + confText + txLink, '', { html: !!txLink });
+          if (actionBtn) {
+            actionBtn.textContent = 'Waiting for burn confirmations…';
+            actionBtn.disabled = true;
+          }
         } else if (status === 'burn_confirmed') {
-          setStatus('Burn confirmed. Sending payout…');
+          const txLink = txHash ? ' — ' + makeTxLink(txHash, 'View TX') : '';
+          setStatus('Burn confirmed. Sending payout…' + txLink, '', { html: !!txLink });
         } else if (status === 'payout_sent') {
-          setStatus('Payout sent.', 'success');
+          const payoutLink = res.payout_tx ? ' — ' + makeTxLink(res.payout_tx, 'View payout TX') : '';
+          setStatus('Payout sent!' + payoutLink, 'success', { html: !!payoutLink });
           stopPolling();
         } else if (status === 'failed') {
           setStatus(res.error || 'Swap failed.', 'error');
@@ -1309,8 +1406,15 @@
 
     async function handleSwapAction() {
       try {
-        setStatus('Creating swap…');
         actionBtn.disabled = true;
+        // Resume existing burn swap if swap already created but burn not yet submitted
+        if (swapId && burnAddress && swapMode === 'usdm_to_crypto') {
+          setStatus('Resuming burn…');
+          await submitBurn();
+          startPolling();
+          return;
+        }
+        setStatus('Creating swap…');
         await createSwap();
         if (swapMode === 'usdm_to_crypto') {
           await submitBurn();

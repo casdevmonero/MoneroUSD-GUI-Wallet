@@ -53,6 +53,7 @@ window.addEventListener('unhandledrejection', function(e) {
   // 1.0 USDm = 1e8 atomic units (8 decimal places, CRYPTONOTE_DISPLAY_DECIMAL_POINT = 8).
   const USDM_ATOMIC_UNIT = 1e8;
   const USDM_DECIMALS = 8;
+  const USDM_BURN_CONFIRMATIONS = 6; // default; overridden by backend response
   const MINIMUM_FEE_USDM = 1000000n;  // 0.01 USDm in atomic units
   const FEE_DIVISOR = 200n;            // 0.5% fee = amount / 200
 
@@ -3099,8 +3100,11 @@ window.addEventListener('unhandledrejection', function(e) {
       depositAddress = record.deposit_address || '';
       showSwapId(swapId);
       updateDepositSection();
-      setStatus('Resuming swap ' + (swapId || '').slice(0, 8) + '...');
-      if (actionBtn) { actionBtn.disabled = true; actionBtn.textContent = 'Polling...'; }
+      setStatus('Resuming swap ' + (swapId || '').slice(0, 8) + '\u2026');
+      if (actionBtn) {
+        actionBtn.textContent = swapMode === 'usdm_to_crypto' ? 'Resume burn & swap' : 'Resume swap';
+        actionBtn.disabled = true;
+      }
       if (newSwapBtn) newSwapBtn.classList.remove('hidden');
       if (cancelBtn) cancelBtn.classList.remove('hidden');
       startPolling();
@@ -3422,8 +3426,9 @@ window.addEventListener('unhandledrejection', function(e) {
       }, { bioToken: burnBioToken, timeoutMs: 120000 });
       await swapFetch(`/api/swaps/${swapId}/burn`, { method: 'POST', body: { tx_hash: res.tx_hash, owner_secret: swapOwnerSecret } });
       persistSwap({ swap_id: swapId, status: 'burn_submitted', burn_tx: res.tx_hash });
-      setStatus('Burn submitted. Waiting for confirmation…');
-      actionBtn.textContent = 'Waiting for burn confirmation';
+      const burnTxLink = txLink('USDm', res.tx_hash);
+      setStatus('Burn submitted (0/' + USDM_BURN_CONFIRMATIONS + ' confirmations) ' + burnTxLink, 'success');
+      actionBtn.textContent = 'Waiting for burn confirmations (0/' + USDM_BURN_CONFIRMATIONS + ')';
       actionBtn.disabled = true;
       return res.tx_hash;
     }
@@ -3464,10 +3469,25 @@ window.addEventListener('unhandledrejection', function(e) {
           refreshTransfers().catch(() => {});
         } else if (status === 'awaiting_burn') {
           setStatus('Awaiting USDm burn.');
+          if (actionBtn) {
+            actionBtn.textContent = 'Resume burn & swap';
+            actionBtn.disabled = false;
+            actionBtn.classList.remove('hidden');
+          }
         } else if (status === 'burn_submitted') {
-          setStatus('Burn submitted. Waiting for confirmation…');
+          const burnConf = res.burn_confirmations != null ? Number(res.burn_confirmations) : 0;
+          const burnReq = res.burn_confirmations_required != null ? Number(res.burn_confirmations_required) : USDM_BURN_CONFIRMATIONS;
+          const burnTxHash = res.burn_tx || '';
+          const burnTxLinkHtml = burnTxHash ? ' ' + txLink('USDm', burnTxHash) : '';
+          setStatus('Burn submitted (' + burnConf + '/' + burnReq + ' confirmations)' + burnTxLinkHtml, 'success');
+          if (actionBtn) {
+            actionBtn.textContent = 'Waiting for burn confirmations (' + burnConf + '/' + burnReq + ')';
+            actionBtn.disabled = true;
+          }
         } else if (status === 'burn_confirmed') {
-          setStatus('Burn confirmed. Sending payout…');
+          const confirmedTxHash = res.burn_tx || '';
+          const confirmedTxLink = confirmedTxHash ? ' ' + txLink('USDm', confirmedTxHash) : '';
+          setStatus('Burn confirmed. Sending payout\u2026' + confirmedTxLink, 'success');
         } else if (status === 'payout_sent') {
           const payoutTxLink = res.payout_tx
             ? ' ' + txLink(swapAsset, res.payout_tx)
@@ -3502,8 +3522,15 @@ window.addEventListener('unhandledrejection', function(e) {
 
     async function handleSwapAction() {
       try {
-        setStatus('Creating swap…');
         actionBtn.disabled = true;
+        // Resume existing burn swap if swap already created but burn not yet submitted
+        if (swapId && burnAddress && swapMode === 'usdm_to_crypto') {
+          setStatus('Resuming burn\u2026');
+          await submitBurn();
+          startPolling();
+          return;
+        }
+        setStatus('Creating swap\u2026');
         await createSwap();
         if (swapMode === 'usdm_to_crypto') {
           await submitBurn();

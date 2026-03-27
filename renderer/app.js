@@ -55,9 +55,9 @@ window.addEventListener('unhandledrejection', function(e) {
   const USDM_DECIMALS = 8;
   const USDM_BURN_CONFIRMATIONS = 6; // default; overridden by backend response
   const MINIMUM_FEE_USDM = 1000000n;  // 0.01 USDm in atomic units
-  const FEE_DIVISOR = 200n;            // 0.5% fee = amount / 200
+  const FEE_DIVISOR = 1000n;           // 0.1% fee = amount / 1000
 
-  /** Estimate tx fee: max(amount * 0.5%, 0.01 USDm) */
+  /** Estimate tx fee: max(amount * 0.1%, 0.01 USDm) */
   function estimateTxFee(amountAtomic) {
     const pctFee = amountAtomic / FEE_DIVISOR;
     return pctFee > MINIMUM_FEE_USDM ? pctFee : MINIMUM_FEE_USDM;
@@ -402,7 +402,7 @@ window.addEventListener('unhandledrejection', function(e) {
     for (let i = 0; i < 25; i += 1) {
       const filename = `wallet${startNum + i}`;
       try {
-        await rpcImmediate('create_wallet', { filename, password: '', language: 'English' }, { timeoutMs: 30000 });
+        await rpcImmediate('create_wallet', { filename, password: '', language: 'English' }, { timeoutMs: 60000 });
         return filename;
       } catch (e) {
         const msg = e && e.message ? e.message : '';
@@ -496,9 +496,9 @@ window.addEventListener('unhandledrejection', function(e) {
   }
 
   // Configure wallet RPC: enable periodic blockchain refresh so balance updates.
-  // Note: skip set_daemon — wallet-rpc already has --daemon-address from startup.
-  // Calling set_daemon on a freshly restored/opened wallet triggers a blocking
-  // background sync that freezes all subsequent RPC calls.
+  // Note: set_daemon is handled by the server after restore/open/create —
+  // the server disconnects daemon before restore (to prevent blocking auto-sync)
+  // and reconnects it after, so the client's refresh calls can actually sync.
   const AUTO_REFRESH_PERIOD_SEC = 10;
   // FCMP++ uses full-chain membership proofs — no ring signatures / decoys needed.
   // Default ring_size=0 for all transactions on this blockchain.
@@ -847,8 +847,13 @@ window.addEventListener('unhandledrejection', function(e) {
   }
 
   async function configureWalletRpcMoneroStyle() {
+    // IMPORTANT: Disable auto_refresh on the remote wallet-rpc.
+    // wallet-rpc is single-threaded — auto_refresh blocks ALL other RPC calls
+    // (health pings, get_balance, get_transfers, transfers). This causes the
+    // health monitor to declare the process unhealthy and kill it.
+    // The client drives sync via incrementalRefresh() and the periodic balance interval.
     try {
-      await rpcImmediate('auto_refresh', { enable: true, period: AUTO_REFRESH_PERIOD_SEC }, { timeoutMs: 5000 });
+      await rpcImmediate('auto_refresh', { enable: false }, { timeoutMs: 5000 });
     } catch (e) {
       if (e && !/restricted|denied|unavailable/i.test(String(e.message))) console.warn('auto_refresh:', e);
     }
@@ -940,9 +945,8 @@ window.addEventListener('unhandledrejection', function(e) {
   }
 
   async function setDaemonAndRefresh(startHeight, onProgress, options = {}) {
-    // Skip set_daemon — wallet-rpc already has --daemon-address from startup.
-    // Calling set_daemon on a freshly restored wallet triggers a blocking background
-    // sync that freezes all subsequent RPC calls.
+    // set_daemon is handled by the server after restore/open/create.
+    // The server connects the daemon automatically, so we just need to refresh.
     if (onProgress) onProgress('Syncing…');
     return incrementalRefresh(startHeight, onProgress, options);
   }
@@ -1243,36 +1247,77 @@ window.addEventListener('unhandledrejection', function(e) {
     return LOCAL_NODE_HINT;
   }
 
+  /* ── CakeWallet-style Unified RPC Layer ───────────────────────────────────
+   * Replaces 5 separate RPC functions (rpc, rpcUnqueued, rpcImmediate,
+   * rpcNoRetry, rpcViaLightWallet) with a single unified function.
+   *
+   * In Electron mode: queuing/state/retry handled by WalletRpcManager in main process.
+   * In browser mode: queuing handled by server.js sessions; retry handled here.
+   *
+   * Priority: 'high' for transfers/freeze/thaw (interrupts refresh), 'normal' for reads.
+   */
   const RPC_RETRY_ATTEMPTS = 3;
   const RPC_RETRY_DELAY_MS = 2000;
 
   function isRetryableRpcError(msg, status) {
     const s = String(msg || '');
+    // Only retry on connection errors — NOT timeouts (server is legitimately busy; retrying makes it worse)
     return status === 502 ||
-      /ECONNRESET|ECONNREFUSED|connection reset|unreachable|refused|timed out|Failed to fetch|502|socket hang up/i.test(s);
+      /ECONNRESET|ECONNREFUSED|connection reset|unreachable|refused|Failed to fetch|502|socket hang up/i.test(s);
   }
 
   let rpcQueue = Promise.resolve();
   let importInFlight = false;
+  let transferInFlight = false;
   let switchInFlight = false;
   let autoRefreshSuspended = false;
 
-  async function rpc(method, params = {}, options = {}) {
-    const timeoutMs = options.timeoutMs;
-    const rpcUrl = getRpcUrl();
-    const prev = rpcQueue;
-    let resolveNext;
-    const next = new Promise((r) => { resolveNext = r; });
-    rpcQueue = next;
-    const run = async () => {
-      await prev;
-      try {
-        return await rpcUnqueued(method, params, options, timeoutMs, rpcUrl);
-      } finally {
-        resolveNext();
+  // Listen for RPC state changes from main process (Electron mode)
+  if (window.electronAPI && window.electronAPI.onRpcStateChange) {
+    window.electronAPI.onRpcStateChange(function(data) {
+      if (data.to === 'error' || data.to === 'disconnected') {
+        rpcQueue = Promise.resolve(); // drain stuck queue on disconnect
       }
-    };
-    return run();
+    });
+  }
+
+  /**
+   * Unified RPC function — handles Electron IPC, light wallet, and browser fetch.
+   * @param {string} method - RPC method name
+   * @param {object} params - RPC parameters
+   * @param {object} options - { timeoutMs, priority, bioToken }
+   */
+  async function rpc(method, params = {}, options = {}) {
+    const timeoutMs = options.timeoutMs || 30000;
+
+    // FCMP++: Auto-inject ring_size for transfer calls
+    if (method === 'transfer' && params && params.ring_size == null) {
+      params = Object.assign({}, params, { ring_size: FCMP_RING_SIZE });
+    }
+
+    // Path 1: Light wallet
+    const light = getLightWalletConfig();
+    if (light.enabled) {
+      return rpcViaLightWallet(light, method, params, timeoutMs);
+    }
+
+    // Path 2: Electron IPC — WalletRpcManager handles queuing, state, retry
+    if (typeof window !== 'undefined' && window.electronAPI && typeof window.electronAPI.invokeRpc === 'function') {
+      return window.electronAPI.invokeRpc(getRpcUrl(), method, params, timeoutMs);
+    }
+
+    // Path 3: Browser fetch with retry
+    return rpcViaBrowserFetch(method, params, options, timeoutMs);
+  }
+
+  // Aliases for backward compatibility — all route through unified rpc()
+  async function rpcImmediate(method, params = {}, options = {}) {
+    return rpc(method, params, options);
+  }
+
+  async function rpcNoRetry(method, params = {}, options = {}) {
+    if (!options.timeoutMs) options = Object.assign({}, options, { timeoutMs: 120000 });
+    return rpc(method, params, options);
   }
 
   function suspendAutoRefresh() {
@@ -1327,23 +1372,11 @@ window.addEventListener('unhandledrejection', function(e) {
     }
   }
 
-  async function rpcUnqueued(method, params, options, timeoutMs, rpcUrl) {
-    // FCMP++: Automatically inject ring_size for all transfer-type methods
-    // so transactions always use the correct proof system regardless of call site.
-    if (method === 'transfer' && params && params.ring_size == null) {
-      params = Object.assign({}, params, { ring_size: FCMP_RING_SIZE });
-    }
+  // Browser-mode fetch with retry and biometric handling
+  async function rpcViaBrowserFetch(method, params, options, timeoutMs) {
     let lastErr;
     for (let attempt = 1; attempt <= RPC_RETRY_ATTEMPTS; attempt++) {
       try {
-        const light = getLightWalletConfig();
-        if (light.enabled) {
-          return await rpcViaLightWallet(light, method, params, timeoutMs || 30000);
-        }
-        if (typeof window !== 'undefined' && window.electronAPI && typeof window.electronAPI.invokeRpc === 'function') {
-          return await window.electronAPI.invokeRpc(rpcUrl, method, params, timeoutMs || 30000);
-        }
-
         const url = getFetchUrl();
         const controller = timeoutMs ? new AbortController() : null;
         let timeoutId;
@@ -1356,20 +1389,13 @@ window.addEventListener('unhandledrejection', function(e) {
             method: 'POST',
             headers: getRpcHeaders(options.bioToken),
             credentials: 'same-origin',
-            body: JSON.stringify({
-              jsonrpc: '2.0',
-              id: '0',
-              method: method,
-              params: params,
-            }),
+            body: JSON.stringify({ jsonrpc: '2.0', id: '0', method, params }),
             signal: controller ? controller.signal : undefined,
           });
         } catch (e) {
           if (timeoutId) clearTimeout(timeoutId);
           const isAbort = (e && (e.name === 'AbortError' || /abort/i.test(String(e.message))));
-          if (isAbort) {
-            throw new Error('Request timed out.' + networkErrorHint());
-          }
+          if (isAbort) throw new Error('Request timed out.' + networkErrorHint());
           throw e;
         }
         if (timeoutId) clearTimeout(timeoutId);
@@ -1394,7 +1420,7 @@ window.addEventListener('unhandledrejection', function(e) {
               if (bioToken) {
                 options._bioRetried = true;
                 options.bioToken = bioToken;
-                continue; // retry the RPC with the bioToken
+                continue;
               }
             } catch (bioErr) {
               throw new Error('Biometric verification failed: ' + (bioErr.message || 'Cancelled'));
@@ -1402,7 +1428,7 @@ window.addEventListener('unhandledrejection', function(e) {
             throw new Error('Biometric authentication required for this operation.');
           }
           const hint502 = isBrowser ? ' The wallet server may be temporarily unavailable.' : LOCAL_NODE_HINT;
-          if (res.status === 502 && attempt < RPC_RETRY_ATTEMPTS && isRetryableRpcError(msg, 502)) {
+          if (res.status === 502 && attempt < RPC_RETRY_ATTEMPTS && isRetryableRpcError(msg, 502) && method !== 'transfer') {
             lastErr = new Error(msg + hint502);
             await new Promise(r => setTimeout(r, RPC_RETRY_DELAY_MS));
             continue;
@@ -1414,7 +1440,7 @@ window.addEventListener('unhandledrejection', function(e) {
       } catch (e) {
         lastErr = e;
         const msg = (e && e.message) || '';
-        if (attempt < RPC_RETRY_ATTEMPTS && isRetryableRpcError(msg)) {
+        if (attempt < RPC_RETRY_ATTEMPTS && isRetryableRpcError(msg) && method !== 'transfer') {
           await new Promise(r => setTimeout(r, RPC_RETRY_DELAY_MS));
           continue;
         }
@@ -1423,47 +1449,6 @@ window.addEventListener('unhandledrejection', function(e) {
       }
     }
     throw lastErr;
-  }
-
-  async function rpcImmediate(method, params = {}, options = {}) {
-    const timeoutMs = options.timeoutMs;
-    const rpcUrl = getRpcUrl();
-    return rpcUnqueued(method, params, options, timeoutMs, rpcUrl);
-  }
-
-  // Single-attempt RPC call — no retries. Use for long-running ops like restore.
-  async function rpcNoRetry(method, params = {}, options = {}) {
-    const timeoutMs = options.timeoutMs || 120000;
-    const rpcUrl = getRpcUrl();
-    // Use Electron IPC when available — same path as rpcImmediate/rpc.
-    // Without this, rpcNoRetry sends via fetch (Session A) while rpcImmediate
-    // sends via invokeRpc (Session B), causing wallet ops to land on different sessions.
-    if (typeof window !== 'undefined' && window.electronAPI && typeof window.electronAPI.invokeRpc === 'function') {
-      return await window.electronAPI.invokeRpc(rpcUrl, method, params, timeoutMs);
-    }
-    const url = getFetchUrl();
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      const res = await fetch(url + '/json_rpc', {
-        method: 'POST',
-        headers: getRpcHeaders(),
-        credentials: 'same-origin',
-        body: JSON.stringify({ jsonrpc: '2.0', id: '0', method, params }),
-        signal: controller.signal,
-      });
-      clearTimeout(timeoutId);
-      const text = await res.text();
-      let data;
-      try { data = text ? JSON.parse(text) : {}; } catch (_) { data = {}; }
-      if (!res.ok) throw new Error((data.error && data.error.message) || 'RPC error: ' + res.status);
-      if (data.error) throw new Error(data.error.message || 'RPC error');
-      return data.result;
-    } catch (e) {
-      clearTimeout(timeoutId);
-      if (e && e.name === 'AbortError') throw new Error('Request timed out.');
-      throw e;
-    }
   }
 
   async function openWalletByName(filename, passwordHint = '') {
@@ -2131,7 +2116,7 @@ window.addEventListener('unhandledrejection', function(e) {
           }
         } catch (_) {
           try {
-            const transfers = await rpc('get_transfers', { in: true, out: false, pending: false, pool: false });
+            const transfers = await rpc('get_transfers', { in: true, out: false, pending: false, pool: false }, { timeoutMs: 180000 });
             const inList = transfers.in || [];
             let sumIn = 0n;
             for (const t of inList) {
@@ -2209,6 +2194,7 @@ window.addEventListener('unhandledrejection', function(e) {
       }
       if (rpcFailureCount >= RPC_BACKOFF_THRESHOLD) {
         stopBalanceRefreshInterval();
+        scheduleReconnect();
       }
       debugLog('refreshBalances failed:', e && e.message);
     }
@@ -2275,7 +2261,7 @@ window.addEventListener('unhandledrejection', function(e) {
         out: true,
         pending: true,
         pool: true,
-      });
+      }, { timeoutMs: 180000 });
       const inList = result.in || [];
       const outList = result.out || [];
       const pendingList = result.pending || [];
@@ -2326,11 +2312,37 @@ window.addEventListener('unhandledrejection', function(e) {
               .join('');
 
       if (recentEl) {
-        renderRecentActivity(all, recentEl);
+        await renderRecentActivity(all, recentEl).catch((renderErr) => {
+          debugLog('renderRecentActivity error:', renderErr && renderErr.message);
+          // Fallback: render wallet transfers only, skip staking/swap merge
+          if (all.length > 0) {
+            recentEl.innerHTML = all.slice(0, 20).map((t) => {
+              const isIn = t.type === 'in' || t.type === 'block';
+              const icon = t.type === 'block' ? '⛏' : isIn ? '↓' : t.type === 'out' ? '↑' : '◐';
+              const label = isIn ? 'Received' : t.type === 'out' ? 'Sent' : 'Pending';
+              const sign = isIn ? '+' : '-';
+              const timeStr = t.timestamp ? new Date(t.timestamp * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '';
+              return `<div class="recent-item ${isIn ? 'recent-item-in' : 'recent-item-out'}">
+                <div class="recent-item-icon">${escHtml(icon)}</div>
+                <div class="recent-item-info">
+                  <span class="recent-item-label">${escHtml(label)}</span>
+                  <span class="recent-item-time">${escHtml(timeStr)}</span>
+                </div>
+                <div class="recent-item-amount ${isIn ? 'recent-item-in' : 'recent-item-out'}">${escHtml(sign)}${escHtml(formatAmount(t.amount))} ${escHtml(t.asset_type || ASSET_USDM)}</div>
+              </div>`;
+            }).join('');
+          } else {
+            recentEl.innerHTML = '<div class="recent-empty">No recent transactions</div>';
+          }
+        });
       }
     } catch (e) {
-      listEl.innerHTML = 'Connect wallet RPC in Settings and click Refresh.';
+      const noWallet = isNoWalletError(e);
+      listEl.innerHTML = noWallet
+        ? 'No wallet open. Use Import to restore from seed.'
+        : 'Could not load transactions. Wallet may be reconnecting\u2026';
       if (recentEl) recentEl.innerHTML = '<div class="recent-empty">No recent transactions</div>';
+      debugLog('refreshTransfers failed:', e && e.message);
     }
   }
 
@@ -2397,8 +2409,11 @@ window.addEventListener('unhandledrejection', function(e) {
     } catch (_) {}
 
     // Merge swap history (use async for encrypted swap data)
-    const swapKey = currentWalletAddress || getActiveWalletName() || '_default';
-    const swaps = await getSwapsForWalletAsync(swapKey);
+    let swaps = [];
+    try {
+      const swapKey = currentWalletAddress || getActiveWalletName() || '_default';
+      swaps = await getSwapsForWalletAsync(swapKey);
+    } catch (_) {}
     swaps.forEach((s) => {
       const isMint = s.direction === 'crypto_to_usdm';
       const txid = isMint ? (s.minted_tx || '') : (s.burn_tx || s.payout_tx || '');
@@ -3423,7 +3438,7 @@ window.addEventListener('unhandledrejection', function(e) {
         get_tx_key: true,
         get_tx_hex: false,
         get_tx_metadata: false,
-      }, { bioToken: burnBioToken, timeoutMs: 120000 });
+      }, { bioToken: burnBioToken, timeoutMs: 180000 });
       await swapFetch(`/api/swaps/${swapId}/burn`, { method: 'POST', body: { tx_hash: res.tx_hash, owner_secret: swapOwnerSecret } });
       persistSwap({ swap_id: swapId, status: 'burn_submitted', burn_tx: res.tx_hash });
       const burnTxLink = txLink('USDm', res.tx_hash);
@@ -3783,11 +3798,13 @@ window.addEventListener('unhandledrejection', function(e) {
       }
       // Lock send button to prevent double-sends
       sendInFlight = true;
+      transferInFlight = true;
+      cancelReconnect();
       btnSend.disabled = true;
       btnSend.textContent = 'Sending\u2026';
       showMessage('sendMessage', 'Sending…');
       try {
-        const amount = Number(sendAtomic);
+        const amount = sendAtomic.toString();
         const txResult = await rpcImmediate('transfer', {
           destinations: [{ amount: amount, address: address }],
           priority: priority,
@@ -3795,7 +3812,7 @@ window.addEventListener('unhandledrejection', function(e) {
           get_tx_key: true,
           get_tx_hex: false,
           get_tx_metadata: false,
-        }, { bioToken, timeoutMs: 120000 });
+        }, { bioToken, timeoutMs: 180000 });
         const txHash = txResult && (txResult.tx_hash || txResult.txid) || '';
         const txFee = txResult && txResult.fee ? txResult.fee : null;
         const explorerBase = DEFAULT_EXPLORER_URL;
@@ -3822,8 +3839,14 @@ window.addEventListener('unhandledrejection', function(e) {
         showMessage('sendMessage', e.message || 'Send failed.', true);
       } finally {
         sendInFlight = false;
+        transferInFlight = false;
         btnSend.disabled = false;
         btnSend.textContent = 'Send';
+        // Immediately restore balance refresh if it was stopped during proof construction
+        if (balanceRefreshIntervalId == null) {
+          rpcFailureCount = 0;
+          startBalanceRefreshInterval();
+        }
       }
     });
   }
@@ -4040,7 +4063,7 @@ window.addEventListener('unhandledrejection', function(e) {
             destinations: [{ amount: Number(target), address: currentWalletAddress }],
             priority: 1,
             ring_size: 0, // FCMP++ — no ring signatures needed
-          }, { bioToken });
+          }, { bioToken, timeoutMs: 180000 });
           stakeTxHash = splitResult.tx_hash || '';
 
           // Wait for the self-transfer to be mined (auto-miner should pick it up)
@@ -5278,8 +5301,9 @@ window.addEventListener('unhandledrejection', function(e) {
     showSyncStatus('Rescanning blockchain (rebuilding wallet view)…', true);
     try {
       await rpc('rescan_blockchain', { hard: false }, { timeoutMs: 300000 });
-      showSyncStatus('Rescan done. Syncing from daemon…', true);
-      await rpcImmediate('refresh', { start_height: 0 }, { timeoutMs: 30000 });
+      await rpcImmediate('auto_refresh', { enable: false }, { timeoutMs: 5000 }).catch(() => {});
+      await incrementalRefresh(0, (msg) => showSyncStatus('Rescan done. ' + msg, true), { maxTimeMs: 120000 });
+      await configureWalletRpcMoneroStyle().catch(() => {});
       await refreshAddress();
       await refreshBalances();
       await refreshTransfers();
@@ -5300,8 +5324,10 @@ window.addEventListener('unhandledrejection', function(e) {
       showSyncStatus('Syncing USDm blockchain… Connecting to node…', true);
       let refreshError = '';
       try {
-        const res = await rpcImmediate('refresh', { start_height: 0 }, { timeoutMs: 60000 });
-        const fetched = (res && res.blocks_fetched) || 0;
+        // Disable wallet-rpc auto_refresh to prevent mutex contention during client-driven sync.
+        await rpcImmediate('auto_refresh', { enable: false }, { timeoutMs: 5000 }).catch(() => {});
+        const result = await incrementalRefresh(0, (msg) => showSyncStatus(msg, true), { maxTimeMs: 120000 });
+        const fetched = (result && result.blocks_fetched) || 0;
         showSyncStatus((fetched > 0 ? 'Fetched ' + fetched.toLocaleString() + ' blocks. ' : '') + 'Updating balance…', true);
       } catch (e) {
         refreshError = (e && e.message) ? String(e.message) : '';
@@ -5310,6 +5336,8 @@ window.addEventListener('unhandledrejection', function(e) {
           ? 'Sync failed: ' + short + (isBrowser ? ' Try refreshing the page.' : ' Start local USDm node (USDmd) and wallet RPC.')
           : (isBrowser ? 'Sync failed. Try refreshing the page.' : 'Sync failed. Start USDmd and ./start-wallet-rpc.sh'), true);
       }
+      // Re-enable auto_refresh after client-driven sync completes.
+      await configureWalletRpcMoneroStyle().catch(() => {});
       try {
         await refreshAddress();
         const { parsed } = await fetchUsdmBalance({ immediate: true });
@@ -5317,7 +5345,7 @@ window.addEventListener('unhandledrejection', function(e) {
         lastUsdmBalanceAtomic = display;
         setBalanceDisplayAtomic(display);
       } catch (_) {}
-      refreshTransfers().catch(() => {});
+      await refreshTransfers().catch(() => {});
       updateDashboardSyncInfo();
       startBalanceRefreshInterval();
       if (refreshError) setTimeout(() => showSyncStatus('', false), 8000);
@@ -5466,6 +5494,7 @@ window.addEventListener('unhandledrejection', function(e) {
       if (typeof window.__cancelAutoConnect === 'function') window.__cancelAutoConnect();
       cancelBackgroundSync();
       suspendAutoRefresh();
+      cancelReconnect();
       rpcQueue = Promise.resolve();
       let importWatchdog = null;
       let importWarning = setTimeout(() => {
@@ -5474,7 +5503,7 @@ window.addEventListener('unhandledrejection', function(e) {
       importWatchdog = setTimeout(() => {
         showMessage('importMessage', 'Import timed out. The wallet RPC is not responding. Make sure the daemon and wallet RPC are running, then try again.', true);
         showSyncStatus('', false);
-      }, 150000);
+      }, 300000);
       try {
         // Close any open wallet first to avoid RPC blocking
         await rpcImmediate('close_wallet', {}, { timeoutMs: 8000 }).catch(() => {});
@@ -5490,14 +5519,14 @@ window.addEventListener('unhandledrejection', function(e) {
         // at the correct height from the start.
         try {
           showMessage('importMessage', 'Creating wallet…', false);
-          result = await rpcImmediate('restore_deterministic_wallet', {
+          result = await rpcNoRetry('restore_deterministic_wallet', {
             seed: seed,
             password: password,
             filename: filename,
             restore_height: userHeight,
             language: language,
             autosave_current: true,
-          }, { timeoutMs: 30000 });
+          }, { timeoutMs: 120000 });
           restoredFresh = true;
         } catch (restoreErr) {
           const restoreMsg = String((restoreErr && restoreErr.message) || '');
@@ -5519,14 +5548,14 @@ window.addEventListener('unhandledrejection', function(e) {
                   });
                 }
               } catch (_) {}
-              result = await rpcImmediate('restore_deterministic_wallet', {
+              result = await rpcNoRetry('restore_deterministic_wallet', {
                 seed: seed,
                 password: password,
                 filename: filename,
                 restore_height: userHeight,
                 language: language,
                 autosave_current: true,
-              }, { timeoutMs: 30000 });
+              }, { timeoutMs: 120000 });
               restoredFresh = true;
             } catch (retryErr) {
               // If re-restore also fails with "already exists", just open it
@@ -5625,10 +5654,11 @@ window.addEventListener('unhandledrejection', function(e) {
             showSyncStatus('Sync is taking longer than expected. Balance will update when ready.', true);
           }
 
-          // Phase 2: Wallet-rpc is responsive — do a full refresh to ensure all blocks are scanned.
-          showSyncStatus('Refreshing wallet…', true);
+          // Phase 2: Wallet-rpc is responsive — do an incremental refresh to ensure all blocks are scanned.
+          // Disable wallet-rpc auto_refresh to prevent mutex contention during client-driven sync.
+          await rpcImmediate('auto_refresh', { enable: false }, { timeoutMs: 5000 }).catch(() => {});
           try {
-            await rpcImmediate('refresh', { start_height: 0 }, { timeoutMs: 300000 });
+            await incrementalRefresh(0, (msg) => showSyncStatus(msg, true), { maxTimeMs: 300000 });
           } catch (_) {}
 
           if (getActiveWalletName() !== importedName) return;
@@ -5640,12 +5670,12 @@ window.addEventListener('unhandledrejection', function(e) {
           for (let balRetry = 0; balRetry < 5; balRetry++) {
             await refreshBalances({ force: true }).catch(() => {});
             if (lastUsdmBalanceAtomic > 0n) break;
-            // If balance is still 0, do another refresh pass and retry
+            // If balance is still 0, do another incremental refresh pass and retry
             if (balRetry < 4) {
               try {
-                await rpcImmediate('refresh', {}, { timeoutMs: 30000 });
+                await incrementalRefresh(0, (msg) => showSyncStatus(msg, true), { maxTimeMs: 30000 });
               } catch (_) {}
-              await new Promise(ok => setTimeout(ok, 3000));
+              await new Promise(ok => setTimeout(ok, 2000));
             }
           }
           await refreshTransfers().catch(() => {});
@@ -5685,16 +5715,26 @@ window.addEventListener('unhandledrejection', function(e) {
   }
 
   let balanceRefreshIntervalId = null;
+  let balanceRefreshTickCount = 0;
 
   function startBalanceRefreshInterval() {
     if (balanceRefreshIntervalId != null) return;
-    if (rpcFailureCount >= RPC_BACKOFF_THRESHOLD) return;
+    balanceRefreshTickCount = 0;
     balanceRefreshIntervalId = setInterval(() => {
       if (rpcFailureCount >= RPC_BACKOFF_THRESHOLD) return;
-      if (autoRefreshSuspended || importInFlight || switchInFlight) return;
+      if (autoRefreshSuspended || importInFlight || switchInFlight || transferInFlight) return;
       const dashboard = document.getElementById('pageDashboard');
       if (dashboard && dashboard.classList.contains('active')) {
-        checkConnection().then((r) => { if (r && !r.noWallet) refreshBalances(); }).catch(() => {});
+        balanceRefreshTickCount++;
+        checkConnection().then((r) => {
+          if (r && !r.noWallet) {
+            refreshBalances();
+            // Refresh transaction history every 3rd tick (~30s) to keep Recent Activity current
+            if (balanceRefreshTickCount % 3 === 0) {
+              refreshTransfers().catch(() => {});
+            }
+          }
+        }).catch(() => {});
         refreshDashboardReserveRatio();
       }
     }, 10000);
@@ -5707,40 +5747,70 @@ window.addEventListener('unhandledrejection', function(e) {
     }
   }
 
+  let reconnectTimerId = null;
+  function scheduleReconnect() {
+    if (reconnectTimerId) return; // already scheduled
+    reconnectTimerId = setTimeout(() => {
+      reconnectTimerId = null;
+      rpcFailureCount = 0; // reset so startBalanceRefreshInterval can start
+      checkConnection({ timeoutMs: 10000 }).then((r) => {
+        if (r && !r.noWallet) {
+          startBalanceRefreshInterval();
+          refreshBalances();
+        } else {
+          scheduleReconnect(); // wallet not open yet, keep trying
+        }
+      }).catch(() => {
+        scheduleReconnect(); // still can't connect, try again
+      });
+    }, 30000);
+  }
+  function cancelReconnect() {
+    if (reconnectTimerId) { clearTimeout(reconnectTimerId); reconnectTimerId = null; }
+  }
+
   // ===== Session Keepalive Heartbeat =====
   // Sends a lightweight ping every 2 minutes to prevent idle timeout.
   // Runs even when tab is in background (setInterval still fires, just throttled).
   let keepaliveTimerId = null;
   function startKeepalive() {
     if (keepaliveTimerId) return;
-    // Desktop mode: main.js keeps the relay session alive via RPC calls.
-    // Relative fetch('/api/...') would hit file:// in Electron, so skip.
-    if (!isBrowser) return;
     keepaliveTimerId = setInterval(() => {
-      fetch('/api/session/keepalive', { method: 'POST', credentials: 'same-origin' })
-        .then(r => r.json())
-        .then(data => {
-          if (data.status === 'none') {
-            // Session was lost — if we have a wallet, the next RPC call will auto-create a new session
-            debugLog('[keepalive] Session expired on server');
-          } else if (data.status === 'dead') {
-            debugLog('[keepalive] Session dead, server is auto-restarting');
-          }
-        })
-        .catch(() => { /* network error, will retry next interval */ });
+      if (importInFlight) return; // Don't interfere with import
+      if (isBrowser) {
+        fetch('/api/session/keepalive', { method: 'POST', credentials: 'same-origin' })
+          .then(r => r.json())
+          .then(data => {
+            if (data.status === 'none') {
+              debugLog('[keepalive] Session expired on server');
+            } else if (data.status === 'dead') {
+              debugLog('[keepalive] Session dead, server is auto-restarting');
+            }
+          })
+          .catch(() => {});
+      } else {
+        // Desktop: send a lightweight RPC ping to keep the relay session alive.
+        // This prevents the idle timeout from killing our wallet-rpc process.
+        rpc('get_version', {}, { timeoutMs: 8000 }).catch(() => {});
+      }
     }, 120000); // every 2 minutes
   }
   function stopKeepalive() {
     if (keepaliveTimerId) { clearInterval(keepaliveTimerId); keepaliveTimerId = null; }
   }
-  // Start keepalive immediately — it's lightweight (no wallet-rpc call, just updates lastActivity)
+  // Start keepalive immediately for ALL modes (desktop + browser)
   startKeepalive();
 
   // On visibility change: immediate keepalive + balance refresh when coming back
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') {
-      // Immediate keepalive ping on tab focus (browser mode only)
-      if (isBrowser) fetch('/api/session/keepalive', { method: 'POST', credentials: 'same-origin' }).catch(() => {});
+      if (importInFlight) return; // Don't interfere with import
+      if (isBrowser) {
+        fetch('/api/session/keepalive', { method: 'POST', credentials: 'same-origin' }).catch(() => {});
+      } else {
+        // Desktop: ping relay when app comes back to foreground
+        rpc('get_version', {}, { timeoutMs: 8000 }).catch(() => {});
+      }
     }
   });
 
@@ -5821,9 +5891,17 @@ window.addEventListener('unhandledrejection', function(e) {
       if (seedDisplay) seedDisplay.innerHTML = '<span class="text-muted">Generating new wallet...</span>';
       if (msg) { msg.textContent = ''; msg.classList.remove('error'); }
       try {
+        // Warm the remote session before doing wallet ops — this ensures the
+        // relay session + wallet-rpc process are ready before the timeout-sensitive
+        // create_wallet call. Without this, session init (TLS handshake + wallet-rpc
+        // spawn) eats into create_wallet's timeout budget and can cause timeouts
+        // on slower connections.
+        if (typeof window !== 'undefined' && window.electronAPI && window.electronAPI.initRemoteSession) {
+          try { await window.electronAPI.initRemoteSession(getRpcUrl()); } catch (_) {}
+        }
         // Flush queue and close any open wallet
         rpcQueue = Promise.resolve();
-        await rpcImmediate('close_wallet', {}, { timeoutMs: 5000 }).catch(() => {});
+        await rpcImmediate('close_wallet', {}, { timeoutMs: 8000 }).catch(() => {});
         // Generate a unique filename so we never accidentally open an existing wallet
         const filename = generateWalletFilename();
         try {
@@ -5831,19 +5909,19 @@ window.addEventListener('unhandledrejection', function(e) {
             filename: filename,
             password: '',
             language: 'English',
-          }, { timeoutMs: 30000 });
+          }, { timeoutMs: 60000 });
         } catch (createErr) {
           const createMsg = String((createErr && createErr.message) || '');
           if (/exists|already exists/i.test(createMsg)) {
             // Wallet file already exists — open it instead
-            await rpcImmediate('open_wallet', { filename: filename, password: '' }, { timeoutMs: 15000 });
+            await rpcImmediate('open_wallet', { filename: filename, password: '' }, { timeoutMs: 30000 });
           } else {
             throw createErr;
           }
         }
         createdWalletFilename = filename;
         // Get the seed from the wallet
-        const seedResult = await rpcImmediate('query_key', { key_type: 'mnemonic' }, { timeoutMs: 10000 });
+        const seedResult = await rpcImmediate('query_key', { key_type: 'mnemonic' }, { timeoutMs: 15000 });
         generatedSeed = (seedResult && seedResult.key) || '';
         if (!generatedSeed) throw new Error('Could not retrieve seed phrase');
         renderSeedDisplay(generatedSeed, seedDisplay);
@@ -6054,6 +6132,7 @@ window.addEventListener('unhandledrejection', function(e) {
 
       // Show main app immediately — don't block on restore
       importInFlight = true; // prevent autoConnect from competing
+      cancelReconnect();
       showMainApp();
       initMainApp();
 
@@ -6089,7 +6168,7 @@ window.addEventListener('unhandledrejection', function(e) {
               restore_height: userRestoreHeight,
               language: 'English',
               autosave_current: false,
-            }, { timeoutMs: 30000 });
+            }, { timeoutMs: 600000 });
             restoredFresh = true;
           } catch (e) {
             const em = String(e && e.message || '');
@@ -6116,7 +6195,7 @@ window.addEventListener('unhandledrejection', function(e) {
                   restore_height: userRestoreHeight,
                   language: 'English',
                   autosave_current: false,
-                }, { timeoutMs: 30000 });
+                }, { timeoutMs: 600000 });
                 restoredFresh = true;
               } catch (retryErr) {
                 const retryMsg = String((retryErr && retryErr.message) || '');
@@ -6177,9 +6256,10 @@ window.addEventListener('unhandledrejection', function(e) {
 
           // Phase 2: Refresh to scan any remaining blocks
           importInFlight = false;
-          showSyncStatus('Refreshing wallet…', true);
+          // Disable wallet-rpc auto_refresh to prevent mutex contention during client-driven sync.
+          await rpcImmediate('auto_refresh', { enable: false }, { timeoutMs: 5000 }).catch(() => {});
           try {
-            await rpcImmediate('refresh', {}, { timeoutMs: 300000 });
+            await incrementalRefresh(0, (msg) => showSyncStatus(msg, true), { maxTimeMs: 300000 });
           } catch (_) {}
 
           // Phase 3: Configure, get address, get balance
@@ -6207,9 +6287,9 @@ window.addEventListener('unhandledrejection', function(e) {
             if (lastUsdmBalanceAtomic > 0n) break;
             if (balRetry < 4) {
               try {
-                await rpcImmediate('refresh', {}, { timeoutMs: 30000 });
+                await incrementalRefresh(0, (msg) => showSyncStatus(msg, true), { maxTimeMs: 30000 });
               } catch (_) {}
-              await new Promise(ok => setTimeout(ok, 3000));
+              await new Promise(ok => setTimeout(ok, 2000));
             }
           }
           await refreshTransfers().catch(() => {});
@@ -6239,6 +6319,7 @@ window.addEventListener('unhandledrejection', function(e) {
         cancelBackgroundSync();
         suspendAutoRefresh();
         stopBalanceRefreshInterval();
+        cancelReconnect();
         // Fire-and-forget: don't block logout on wallet-rpc response
         rpcImmediate('close_wallet', {}, { timeoutMs: 4000 }).catch(() => {});
       } catch (_) {}
@@ -6264,9 +6345,10 @@ window.addEventListener('unhandledrejection', function(e) {
           rpcQueue = Promise.resolve();
           const r = await checkConnection({ timeoutMs: 8000 });
           if (r && !r.noWallet) {
-            await configureWalletRpcMoneroStyle().catch(() => {});
             showSyncStatus('Syncing...', true);
-            await rpcImmediate('refresh', { start_height: 0 }, { timeoutMs: 120000 }).catch(() => {});
+            await rpcImmediate('auto_refresh', { enable: false }, { timeoutMs: 5000 }).catch(() => {});
+            await incrementalRefresh(0, (msg) => showSyncStatus(msg, true), { maxTimeMs: 120000 }).catch(() => {});
+            await configureWalletRpcMoneroStyle().catch(() => {});
             await refreshAddress().catch(() => {});
             await refreshBalances({ force: true }).catch(() => {});
             await refreshTransfers().catch(() => {});
@@ -6398,12 +6480,15 @@ window.addEventListener('unhandledrejection', function(e) {
         await configureWalletRpcMoneroStyle().catch(() => {});
       }
       if (autoConnectCancelled || importInFlight) return;
-      // Sync wallet with blockchain on startup — do a full refresh then fetch balance.
-      showSyncStatus('Syncing wallet with blockchain…', true);
+      // Sync wallet with blockchain on startup — use incremental refresh for progress updates.
+      // Disable auto_refresh to prevent mutex contention during client-driven sync.
+      await rpcImmediate('auto_refresh', { enable: false }, { timeoutMs: 5000 }).catch(() => {});
       try {
-        await rpcImmediate('refresh', { start_height: 0 }, { timeoutMs: 300000 });
+        await incrementalRefresh(0, (msg) => showSyncStatus(msg, true), { maxTimeMs: 300000 });
       } catch (_) {}
       if (autoConnectCancelled || importInFlight) return;
+      // Re-enable auto_refresh after client-driven sync completes.
+      await configureWalletRpcMoneroStyle().catch(() => {});
       await refreshAddress().catch(() => {});
       await refreshBalances({ force: true }).catch(() => {});
       await refreshTransfers().catch(() => {});

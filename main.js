@@ -6,6 +6,7 @@ const { spawn } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const { autoUpdater } = require('electron-updater');
+const WalletRpcManager = require('./rpc');
 
 let mainWindow;
 let isUpdating = false; // true when quitAndInstall is about to fire
@@ -1101,10 +1102,8 @@ app.on('before-quit', () => {
   if (isUpdating) return;
   if (localWalletRpc && !localWalletRpc.killed) localWalletRpc.kill('SIGTERM');
   if (localDaemon && !localDaemon.killed) localDaemon.kill('SIGTERM');
-  // Destroy remote relay sessions
-  for (const [hostname] of remoteCookies) {
-    destroyRemoteSession('https://' + hostname);
-  }
+  // Graceful shutdown of wallet manager (kills wallet-rpc, clears sessions)
+  if (walletManager) walletManager.shutdown();
 });
 
 function buildNativeMenu() {
@@ -1241,150 +1240,51 @@ app.on('activate', () => { if (mainWindow === null) createWindow(); });
 
 ipcMain.handle('get-app-version', () => app.getVersion());
 
-// Proxy wallet RPC from main process so renderer (file://) can reach local RPC without CORS.
-// Retry on ECONNRESET / connection errors (local nodes only; wallet RPC can drop under load).
-const RPC_MAX_ATTEMPTS = 3;
-const RPC_RETRY_DELAY_MS = 2000;
+/* ── CakeWallet-style RPC Management Layer ─────────────────────────────────
+ * Uses WalletRpcManager for:
+ * - Connection state machine (disconnected→connecting→connected→syncing→synced)
+ * - Priority-based request queue (transfers interrupt refreshes)
+ * - Exponential backoff reconnection
+ * - Health monitoring with auto-recovery
+ * - Node selection with privacy tiers
+ * - Transaction broadcast failover
+ */
+const walletManager = new WalletRpcManager({ mode: 'electron' });
 
-// Cookie jar for remote relay sessions (per-host)
-const remoteCookies = new Map(); // hostname -> cookie string
-const remoteCsrfTokens = new Map(); // hostname -> CSRF token string
+// Forward state/health/sync events to renderer
+walletManager.on('stateChange', (data) => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('rpc-state-change', data);
+  }
+});
+walletManager.on('syncProgress', (data) => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('sync-progress', data);
+  }
+});
+walletManager.on('unhealthy', (data) => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('rpc-health', { healthy: false, ...data });
+  }
+});
+walletManager.on('healthy', () => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('rpc-health', { healthy: true });
+  }
+});
+walletManager.on('reconnected', () => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('rpc-health', { healthy: true, reconnected: true });
+  }
+});
 
-function attemptWalletRpc(url, method, params, timeoutMs) {
-  return new Promise((resolve, reject) => {
-    const baseUrl = (url || '').trim().replace(/\/$/, '');
-    if (!baseUrl || (!baseUrl.startsWith('http://') && !baseUrl.startsWith('https://'))) {
-      reject(new Error('Invalid wallet RPC URL. Use e.g. https://monerousd.org or http://192.0.2.1:27750'));
-      return;
-    }
-    const reqUrl = baseUrl + '/json_rpc';
-    const u = new URL(reqUrl);
-    const isHttps = u.protocol === 'https:';
-    const isRemote = u.hostname !== '127.0.0.1' && u.hostname !== 'localhost' && u.hostname !== '::1';
-    const body = JSON.stringify({ jsonrpc: '2.0', id: '0', method, params });
-    const headers = { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) };
+// IPC: Get current RPC state
+ipcMain.handle('get-rpc-state', () => walletManager.stateMachine.getStatus());
 
-    // Send session cookie and CSRF token for remote relay connections
-    if (isRemote) {
-      const cookie = remoteCookies.get(u.hostname);
-      if (cookie) headers['Cookie'] = cookie;
-      const csrf = remoteCsrfTokens.get(u.hostname);
-      if (csrf) headers['X-CSRF-Token'] = csrf;
-    }
+// IPC: Cancel active sync
+ipcMain.handle('cancel-sync', () => { walletManager.queue.cancelRefresh(); });
 
-    const opts = {
-      hostname: u.hostname,
-      port: u.port || (isHttps ? 443 : 80),
-      path: u.pathname + u.search,
-      method: 'POST',
-      headers,
-    };
-    const req = (isHttps ? https : http).request(opts, (res) => {
-      // Capture Set-Cookie for remote relay sessions
-      if (isRemote && res.headers['set-cookie']) {
-        for (const sc of res.headers['set-cookie']) {
-          const match = sc.match(/musd_session=([^;]+)/);
-          if (match && match[1]) {
-            remoteCookies.set(u.hostname, 'musd_session=' + match[1]);
-          }
-        }
-      }
-
-      let buf = '';
-      res.on('data', (chunk) => { buf += chunk; });
-      res.on('end', () => {
-        try {
-          // Preserve uint64 precision: JS Number loses precision above 2^53-1. 18M USDm = 1.8e19 atomic units.
-          const raw = (buf || '')
-            .replace(/"balance"\s*:\s*(\d+)/g, '"balance":"$1"')
-            .replace(/"unlocked_balance"\s*:\s*(\d+)/g, '"unlocked_balance":"$1"')
-            .replace(/"amount"\s*:\s*(\d+)/g, '"amount":"$1"');
-          const data = JSON.parse(raw || '{}');
-          if (data.error) reject(new Error(data.error.message || 'RPC error'));
-          else resolve(data.result);
-        } catch (e) {
-          reject(new Error('Invalid RPC response: ' + (e.message || 'parse error')));
-        }
-      });
-    });
-    req.on('error', (e) => reject(e));
-    req.setTimeout(timeoutMs, () => {
-      req.destroy();
-      reject(new Error('Request timed out'));
-    });
-    req.write(body);
-    req.end();
-  });
-}
-
-// Initialize a remote relay session (call /api/session to spawn a per-user wallet-rpc)
-async function initRemoteSession(baseUrl) {
-  return new Promise((resolve, reject) => {
-    const u = new URL(baseUrl);
-    const isHttps = u.protocol === 'https:';
-    const headers = { 'Content-Type': 'application/json' };
-    const cookie = remoteCookies.get(u.hostname);
-    if (cookie) headers['Cookie'] = cookie;
-    const opts = {
-      hostname: u.hostname,
-      port: u.port || (isHttps ? 443 : 80),
-      path: '/api/session',
-      method: 'POST',
-      headers,
-    };
-    const req = (isHttps ? https : http).request(opts, (res) => {
-      // Capture Set-Cookie
-      if (res.headers['set-cookie']) {
-        for (const sc of res.headers['set-cookie']) {
-          const match = sc.match(/musd_session=([^;]+)/);
-          if (match && match[1]) {
-            remoteCookies.set(u.hostname, 'musd_session=' + match[1]);
-          }
-        }
-      }
-      let buf = '';
-      res.on('data', c => buf += c);
-      res.on('end', () => {
-        try {
-          const data = JSON.parse(buf);
-          // Capture CSRF token from session response for use in RPC requests
-          if (data && data.csrfToken) {
-            remoteCsrfTokens.set(u.hostname, data.csrfToken);
-          }
-          resolve(data);
-        } catch (_) { resolve(null); }
-      });
-    });
-    req.setTimeout(30000, () => { req.destroy(); reject(new Error('Session init timeout')); });
-    req.on('error', reject);
-    req.end();
-  });
-}
-
-// Destroy a remote relay session on app quit
-function destroyRemoteSession(baseUrl) {
-  try {
-    const u = new URL(baseUrl);
-    const isHttps = u.protocol === 'https:';
-    const headers = {};
-    const cookie = remoteCookies.get(u.hostname);
-    if (cookie) headers['Cookie'] = cookie;
-    const opts = {
-      hostname: u.hostname,
-      port: u.port || (isHttps ? 443 : 80),
-      path: '/api/session/close',
-      method: 'POST',
-      headers,
-    };
-    const req = (isHttps ? https : http).request(opts, () => {});
-    req.on('error', () => {});
-    req.setTimeout(3000, () => req.destroy());
-    req.end();
-    remoteCookies.delete(u.hostname);
-    remoteCsrfTokens.delete(u.hostname);
-  } catch (_) {}
-}
-
+// IPC: Wallet RPC — unified handler using WalletRpcManager
 ipcMain.handle('wallet-rpc', async (event, { url, method, params = {}, timeoutMs = 30000 }) => {
   const u = (() => { try { return new URL(url); } catch (_) { return null; } })();
   const isRemote = u && u.hostname !== '127.0.0.1' && u.hostname !== 'localhost' && u.hostname !== '::1';
@@ -1392,48 +1292,43 @@ ipcMain.handle('wallet-rpc', async (event, { url, method, params = {}, timeoutMs
     ? ' Check your internet connection or try refreshing.'
     : ' Run USDmd (17750) and ./start-wallet-rpc.sh (27750) locally.';
 
-  // For remote connections, ensure session exists first
-  if (isRemote && !remoteCookies.has(u.hostname)) {
-    try {
-      const sess = await initRemoteSession(url);
-      if (!sess || sess.status !== 'ready') {
-        for (let i = 0; i < 20; i++) {
-          await new Promise(r => setTimeout(r, 500));
-          const s = await initRemoteSession(url).catch(() => null);
-          if (s && s.status === 'ready') break;
-        }
+  try {
+    if (isRemote) {
+      // Remote relay: use WalletRpcManager's remote session handling
+      // with automatic session init, cookie management, and retry
+      return await walletManager.remoteRpc(url, method, params, timeoutMs);
+    } else {
+      // Local wallet-rpc: direct connection with queue and state management
+      if (walletManager.state === WalletRpcManager.STATE.DISCONNECTED) {
+        const port = u ? parseInt(u.port || '27750', 10) : 27750;
+        walletManager._port = port;
+        await walletManager.connect(port);
       }
-    } catch (e) {
-      throw new Error('Failed to connect to MoneroUSD relay: ' + (e.message || '') + hint);
+      return await walletManager.rpc(method, params, { timeoutMs, priority: isTransferLike(method) ? 'high' : 'normal' });
     }
-  }
-
-  let lastErr;
-  for (let attempt = 1; attempt <= RPC_MAX_ATTEMPTS; attempt++) {
-    try {
-      return await attemptWalletRpc(url, method, params, timeoutMs);
-    } catch (e) {
-      lastErr = e;
-      const code = e.code || '';
-      const msg = (e && e.message) || '';
-      const retryable = ['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'ENOTFOUND', 'socket hang up'].some(c => code === c || msg.includes(c));
-      if (attempt < RPC_MAX_ATTEMPTS && retryable) {
-        await new Promise(r => setTimeout(r, RPC_RETRY_DELAY_MS));
-        continue;
-      }
-      const friendly = msg.includes('timed out') ? 'Request timed out.' + hint
-        : /ECONNRESET|socket hang up/i.test(msg || code) ? 'Wallet RPC connection reset.' + hint
-        : msg + hint;
-      throw new Error(friendly);
+  } catch (e) {
+    const msg = (e && e.message) || '';
+    // Session expired on relay — clear and provide helpful error
+    if (/refresh.*page|new session/i.test(msg)) {
+      walletManager._remoteCookies.clear();
+      walletManager._remoteCsrfTokens.clear();
+      throw new Error('Wallet session expired. Reconnecting…' + hint);
     }
+    const friendly = msg.includes('timed out') ? 'Request timed out.' + hint
+      : /ECONNRESET|socket hang up/i.test(msg) ? 'Wallet RPC connection reset.' + hint
+      : msg + hint;
+    throw new Error(friendly);
   }
-  throw lastErr;
 });
+
+function isTransferLike(method) {
+  return method === 'transfer' || method === 'freeze' || method === 'thaw';
+}
 
 // IPC: Initialize remote session explicitly from renderer
 ipcMain.handle('init-remote-session', async (event, { url }) => {
   try {
-    const result = await initRemoteSession(url);
+    const result = await walletManager._initRemoteSession(url);
     return result || { status: 'error' };
   } catch (e) {
     return { status: 'error', error: e.message };
@@ -1446,7 +1341,6 @@ ipcMain.handle('check-wallet-exists', async () => {
   try {
     if (!fs.existsSync(walletDir)) return false;
     const files = fs.readdirSync(walletDir);
-    // Look for .keys files which indicate a created wallet
     return files.some(f => f.endsWith('.keys'));
   } catch (_) {
     return false;
@@ -1455,19 +1349,19 @@ ipcMain.handle('check-wallet-exists', async () => {
 
 // IPC: Generic relay API fetch — routes non-RPC calls (like /delete_wallet_cache)
 // through the same session (remoteCookies) that wallet-rpc uses.
-ipcMain.handle('relay-fetch', async (event, { baseUrl, path, method, body }) => {
+ipcMain.handle('relay-fetch', async (event, { baseUrl, path: fetchPath, method, body }) => {
   return new Promise((resolve, reject) => {
     const u = new URL(baseUrl);
     const isHttps = u.protocol === 'https:';
     const payload = body ? JSON.stringify(body) : '';
     const headers = { 'Content-Type': 'application/json' };
     if (payload) headers['Content-Length'] = Buffer.byteLength(payload);
-    const cookie = remoteCookies.get(u.hostname);
+    const cookie = walletManager._remoteCookies.get(u.hostname);
     if (cookie) headers['Cookie'] = cookie;
     const opts = {
       hostname: u.hostname,
       port: u.port || (isHttps ? 443 : 80),
-      path: path,
+      path: fetchPath,
       method: method || 'POST',
       headers,
     };
@@ -1475,7 +1369,7 @@ ipcMain.handle('relay-fetch', async (event, { baseUrl, path, method, body }) => 
       if (res.headers['set-cookie']) {
         for (const sc of res.headers['set-cookie']) {
           const match = sc.match(/musd_session=([^;]+)/);
-          if (match && match[1]) remoteCookies.set(u.hostname, 'musd_session=' + match[1]);
+          if (match && match[1]) walletManager._remoteCookies.set(u.hostname, 'musd_session=' + match[1]);
         }
       }
       let buf = '';

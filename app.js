@@ -235,9 +235,33 @@
 
   let rpcQueue = Promise.resolve();
 
+  // Track in-flight refresh/rescan AbortControllers so they can be cancelled before import.
+  const inflightRefreshControllers = new Set();
+
+  // Abort all in-flight refresh/rescan requests so the wallet RPC server is free for import.
+  function abortInflightRefreshes() {
+    for (const c of inflightRefreshControllers) {
+      try { c.abort(); } catch (_) {}
+    }
+    inflightRefreshControllers.clear();
+  }
+
+  // Read-only RPC methods safe to run without waiting in the queue.
+  // These must not block behind long-running operations like 'refresh'.
+  const CONCURRENT_CLIENT_RPC = new Set([
+    'get_version', 'get_address', 'get_balance', 'get_height',
+    'get_accounts', 'get_transfers', 'get_transfer_by_txid',
+    'query_key', 'get_languages', 'get_attribute',
+    'incoming_transfers', 'get_sync_info',
+  ]);
+
   async function rpc(method, params = {}, options = {}) {
     const timeoutMs = options.timeoutMs;
     const rpcUrl = getRpcUrl();
+    // Read-only methods bypass the queue so they aren't blocked by long-running refresh/rescan.
+    if (CONCURRENT_CLIENT_RPC.has(method)) {
+      return rpcUnqueued(method, params, options, timeoutMs, rpcUrl);
+    }
     const prev = rpcQueue;
     let resolveNext;
     const next = new Promise((r) => { resolveNext = r; });
@@ -262,11 +286,13 @@
         }
 
         const url = getFetchUrl();
-        const controller = timeoutMs ? new AbortController() : null;
+        const controller = new AbortController();
         let timeoutId;
-        if (controller && timeoutMs) {
+        if (timeoutMs) {
           timeoutId = setTimeout(() => controller.abort(), timeoutMs);
         }
+        const isRefreshLike = (method === 'refresh' || method === 'rescan_blockchain');
+        if (isRefreshLike) inflightRefreshControllers.add(controller);
         let res;
         try {
           res = await fetch(url + '/json_rpc', {
@@ -278,10 +304,11 @@
               method: method,
               params: params,
             }),
-            signal: controller ? controller.signal : undefined,
+            signal: controller.signal,
           });
         } catch (e) {
           if (timeoutId) clearTimeout(timeoutId);
+          if (isRefreshLike) inflightRefreshControllers.delete(controller);
           const isAbort = (e && (e.name === 'AbortError' || /abort/i.test(String(e.message))));
           if (isAbort) {
             throw new Error('Request timed out.' + networkErrorHint());
@@ -289,6 +316,7 @@
           throw e;
         }
         if (timeoutId) clearTimeout(timeoutId);
+        if (isRefreshLike) inflightRefreshControllers.delete(controller);
         const text = await res.text();
         let data;
         try {
@@ -853,7 +881,7 @@
       let usedTransferFallback = false;
       if (parsed.balance === 0n && parsed.unlocked_balance === 0n) {
         try {
-          const transfers = await rpc('get_transfers', { in: true, out: false, pending: false, pool: false });
+          const transfers = await rpc('get_transfers', { in: true, out: false, pending: false, pool: false }, { timeoutMs: 120000 });
           const inList = transfers.in || [];
           let sumIn = 0n;
           for (const t of inList) {
@@ -961,7 +989,7 @@
         out: true,
         pending: true,
         pool: true,
-      });
+      }, { timeoutMs: 120000 });
       const inList = result.in || [];
       const outList = result.out || [];
       const pendingList = result.pending || [];
@@ -1686,11 +1714,13 @@
       }
 
       showMessage('importMessage', 'Importing… (seed is not stored or logged)');
+      // Abort any in-flight refresh/rescan so the wallet RPC server is free for import
+      abortInflightRefreshes();
       // Flush the RPC queue so any long-running refresh doesn't block import
       rpcQueue = Promise.resolve();
       try {
-        // Close any open wallet first
-        await rpc('close_wallet', {}, { timeoutMs: 8000 }).catch(() => {});
+        // Close any open wallet first (longer timeout in case server is finishing a request)
+        await rpc('close_wallet', {}, { timeoutMs: 30000 }).catch(() => {});
         const filename = 'imported_' + Date.now() + '.wallet';
         const result = await rpc('restore_deterministic_wallet', {
           seed: seed,

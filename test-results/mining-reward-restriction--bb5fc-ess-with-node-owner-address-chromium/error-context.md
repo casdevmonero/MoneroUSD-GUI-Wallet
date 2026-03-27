@@ -1,0 +1,83 @@
+# Page snapshot
+
+```yaml
+- generic [active] [ref=e1]:
+  - generic [ref=e3]:
+    - generic [ref=e4]:
+      - img "MoneroUSD" [ref=e5]
+      - heading "MoneroUSD" [level=1] [ref=e6]
+      - paragraph [ref=e7]: Private stablecoin wallet
+    - paragraph [ref=e8]: Could not start wallet engine. Please refresh.
+    - generic [ref=e10]:
+      - button "+ Create new wallet Generate a new seed phrase" [ref=e11] [cursor=pointer]:
+        - generic [ref=e12]: +
+        - generic [ref=e13]:
+          - strong [ref=e14]: Create new wallet
+          - text: Generate a new seed phrase
+      - button "↷ Restore from seed Import an existing wallet" [ref=e15] [cursor=pointer]:
+        - generic [ref=e16]: ↷
+        - generic [ref=e17]:
+          - strong [ref=e18]: Restore from seed
+          - text: Import an existing wallet
+  - generic [ref=e19]:
+    - complementary [ref=e20]:
+      - generic [ref=e21]:
+        - img "MoneroUSD" [ref=e22]
+        - generic [ref=e23]: MoneroUSD
+      - navigation [ref=e24]:
+        - button "◆ Dashboard" [ref=e25] [cursor=pointer]:
+          - generic [ref=e26]: ◆
+          - generic [ref=e27]: Dashboard
+        - button "↑ Send" [ref=e28] [cursor=pointer]:
+          - generic [ref=e29]: ↑
+          - generic [ref=e30]: Send
+        - button "↓ Receive" [ref=e31] [cursor=pointer]:
+          - generic [ref=e32]: ↓
+          - generic [ref=e33]: Receive
+        - button "☷ Addressbook" [ref=e34] [cursor=pointer]:
+          - generic [ref=e35]: ☷
+          - generic [ref=e36]: Addressbook
+        - button "⇄ Swap" [ref=e37] [cursor=pointer]:
+          - generic [ref=e38]: ⇄
+          - generic [ref=e39]: Swap
+        - button "★ Staking" [ref=e40] [cursor=pointer]:
+          - generic [ref=e41]: ★
+          - generic [ref=e42]: Staking
+        - button "⚗ Lending" [ref=e43] [cursor=pointer]:
+          - generic [ref=e44]: ⚗
+          - generic [ref=e45]: Lending
+        - button "☰ History" [ref=e46] [cursor=pointer]:
+          - generic [ref=e47]: ☰
+          - generic [ref=e48]: History
+        - button "⎘ Import" [ref=e49] [cursor=pointer]:
+          - generic [ref=e50]: ⎘
+          - generic [ref=e51]: Import
+        - button "⚙ Settings" [ref=e52] [cursor=pointer]:
+          - generic [ref=e53]: ⚙
+          - generic [ref=e54]: Settings
+      - generic [ref=e55]:
+        - button "Generate new wallet" [ref=e56] [cursor=pointer]
+        - button "Disconnect wallet" [ref=e57] [cursor=pointer]
+        - button "Logout" [ref=e58] [cursor=pointer]
+      - generic [ref=e62]: Disconnected
+    - main [ref=e63]:
+      - generic [ref=e64]:
+        - heading "Dashboard" [level=1] [ref=e65]
+        - generic [ref=e66]:
+          - button "Rescan" [ref=e67] [cursor=pointer]
+          - button "↻" [ref=e68] [cursor=pointer]
+      - generic [ref=e69]:
+        - generic [ref=e71]:
+          - generic [ref=e72]: USDm Balance
+          - text: —
+        - generic [ref=e73]:
+          - button "Send USDm" [ref=e74] [cursor=pointer]
+          - button "Receive" [ref=e75] [cursor=pointer]
+          - button "Swap XMR ↔ USDm" [ref=e76] [cursor=pointer]
+        - generic [ref=e77]:
+          - generic [ref=e78]:
+            - heading "Recent activity" [level=3] [ref=e79]
+            - link "View all" [ref=e80] [cursor=pointer]:
+              - /url: "#"
+          - generic [ref=e82]: No recent transactions
+```

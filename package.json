@@ -1,6 +1,6 @@
 {
   "name": "monerousd-desktop",
-  "version": "1.2.27",
+  "version": "1.2.44",
   "description": "Monero USD desktop wallet - balance, send, receive, swap",
   "main": "main.js",
   "scripts": {
@@ -38,6 +38,7 @@
     "files": [
       "main.js",
       "preload.js",
+      "rpc/**",
       "renderer/**",
       "assets/**"
     ],

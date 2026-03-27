@@ -31,6 +31,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Check if wallet files actually exist on disk
   checkWalletExists: () => ipcRenderer.invoke('check-wallet-exists'),
 
+  // CakeWallet-style RPC state management
+  getRpcState: () => ipcRenderer.invoke('get-rpc-state'),
+  cancelSync: () => ipcRenderer.invoke('cancel-sync'),
+  onRpcStateChange: (cb) => ipcRenderer.on('rpc-state-change', (_, data) => cb(data)),
+  onRpcHealth: (cb) => ipcRenderer.on('rpc-health', (_, data) => cb(data)),
+  onSyncProgress: (cb) => ipcRenderer.on('sync-progress', (_, data) => cb(data)),
+
   // Events from main process
   onLocalNodeStopped: (cb) => ipcRenderer.on('local-node-stopped', (_, data) => cb(data)),
   onLocalWalletRpcStopped: (cb) => ipcRenderer.on('local-wallet-rpc-stopped', (_, data) => cb(data)),

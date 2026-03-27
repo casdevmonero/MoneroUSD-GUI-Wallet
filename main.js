@@ -5,7 +5,144 @@ const https = require('https');
 const { spawn } = require('child_process');
 const fs = require('fs');
 const os = require('os');
+const crypto = require('crypto');
 const { autoUpdater } = require('electron-updater');
+
+// ===== Dandelion++ (desktop/local node mode) =====
+const DANDELION_STEM_PROB_DESKTOP = parseFloat(process.env.DANDELION_STEM_PROB || '0.9');
+const DANDELION_RELAY_PEERS_DESKTOP = (process.env.DANDELION_RELAY_PEERS || '')
+  .split(',').map(s => s.trim()).filter(Boolean);
+const desktopDandelionPool = new Map();
+
+function desktopDaemonSendRaw(txHex) {
+  return new Promise((resolve, reject) => {
+    const body = JSON.stringify({ tx_as_hex: txHex, do_not_relay: false });
+    const opts = {
+      hostname: '127.0.0.1', port: 17750,
+      path: '/send_raw_transaction', method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+    };
+    const req = http.request(opts, (r) => {
+      let buf = '';
+      r.on('data', c => (buf += c));
+      r.on('end', () => { try { resolve(JSON.parse(buf)); } catch (_) { resolve({}); } });
+    });
+    req.setTimeout(15000, () => { req.destroy(); reject(new Error('daemon send_raw timeout')); });
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+}
+
+function desktopStemForwardToPeer(peer, txHex) {
+  return new Promise((resolve, reject) => {
+    let u;
+    try { u = new URL(peer + '/api/dandelion/stem'); } catch (_) {
+      return reject(new Error('Invalid peer URL'));
+    }
+    const isHttps = u.protocol === 'https:';
+    const mod = isHttps ? https : http;
+    const body = JSON.stringify({ tx_as_hex: txHex });
+    const opts = {
+      hostname: u.hostname,
+      port: u.port || (isHttps ? 443 : 80),
+      path: u.pathname, method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+    };
+    const req = mod.request(opts, (r) => {
+      let buf = '';
+      r.on('data', c => (buf += c));
+      r.on('end', () => {
+        if (r.statusCode >= 200 && r.statusCode < 300) resolve();
+        else reject(new Error('Stem peer HTTP ' + r.statusCode));
+      });
+    });
+    req.setTimeout(10000, () => { req.destroy(); reject(new Error('stem peer timeout')); });
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+}
+
+async function desktopDandelionRoute(txHex, txHash) {
+  if (DANDELION_RELAY_PEERS_DESKTOP.length > 0 && Math.random() < DANDELION_STEM_PROB_DESKTOP) {
+    const peer = DANDELION_RELAY_PEERS_DESKTOP[Math.floor(Math.random() * DANDELION_RELAY_PEERS_DESKTOP.length)];
+    const timeoutMs = 30000 + Math.random() * 30000;
+    const handle = setTimeout(async () => {
+      if (desktopDandelionPool.has(txHash)) {
+        desktopDandelionPool.delete(txHash);
+        await desktopDaemonSendRaw(txHex).catch(() => {});
+      }
+    }, timeoutMs);
+    desktopDandelionPool.set(txHash, { txHex, handle });
+    try {
+      await desktopStemForwardToPeer(peer, txHex);
+    } catch (_) {
+      clearTimeout(handle);
+      desktopDandelionPool.delete(txHash);
+      await desktopDaemonSendRaw(txHex);
+    }
+  } else {
+    await desktopDaemonSendRaw(txHex);
+  }
+}
+
+// ===== Coinbase unlock window (desktop/local node mode) =====
+const COINBASE_UNLOCK_BLOCKS_DESKTOP = 10;
+let desktopCachedChainHeight = 0;
+let desktopChainHeightFetchedAt = 0;
+
+async function desktopGetChainHeight() {
+  const now = Date.now();
+  if (desktopCachedChainHeight > 0 && now - desktopChainHeightFetchedAt < 30000) {
+    return desktopCachedChainHeight;
+  }
+  try {
+    const result = await new Promise((resolve, reject) => {
+      const body = JSON.stringify({ jsonrpc: '2.0', id: '0', method: 'get_block_count', params: {} });
+      const opts = {
+        hostname: '127.0.0.1', port: 17750, path: '/json_rpc', method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+      };
+      const req = http.request(opts, (r) => {
+        let buf = '';
+        r.on('data', c => (buf += c));
+        r.on('end', () => { try { resolve(JSON.parse(buf)); } catch (_) { resolve(null); } });
+      });
+      req.setTimeout(5000, () => { req.destroy(); reject(new Error('timeout')); });
+      req.on('error', reject);
+      req.write(body);
+      req.end();
+    });
+    if (result && result.result && result.result.count > 0) {
+      desktopCachedChainHeight = result.result.count - 1;
+      desktopChainHeightFetchedAt = now;
+    }
+  } catch (_) {}
+  return desktopCachedChainHeight;
+}
+
+function desktopEnforceCoinbaseLock(result) {
+  if (!result || !desktopCachedChainHeight) return;
+  for (const key of ['in', 'block']) {
+    const list = result[key];
+    if (!Array.isArray(list)) continue;
+    for (const tx of list) {
+      const feeZero = tx.fee === 0 || tx.fee === '0';
+      const isCoinbase = tx.is_coinbase === true
+        || tx.type === 'block'
+        || (feeZero && !Array.isArray(tx.destinations) && (tx.type === 'in' || !tx.type));
+      if (isCoinbase && tx.height > 0) {
+        const age = desktopCachedChainHeight - tx.height;
+        if (age < COINBASE_UNLOCK_BLOCKS_DESKTOP) {
+          tx.coinbase_locked = true;
+          tx.coinbase_unlocks_at = tx.height + COINBASE_UNLOCK_BLOCKS_DESKTOP;
+          tx.confirmations_needed = COINBASE_UNLOCK_BLOCKS_DESKTOP - age;
+        }
+      }
+    }
+  }
+}
 
 let mainWindow;
 let isUpdating = false; // true when quitAndInstall is about to fire
@@ -1227,10 +1364,32 @@ ipcMain.handle('wallet-rpc', async (event, { url, method, params = {}, timeoutMs
     }
   }
 
+  // Dandelion++ for local transfer: inject do_not_relay + get_tx_hex
+  const isLocalTransfer = method === 'transfer' && !isRemote;
+  const rpcParams = isLocalTransfer
+    ? { ...params, do_not_relay: true, get_tx_hex: true }
+    : params;
+
+  // Pre-fetch chain height for coinbase lock enforcement on local get_transfers
+  if (method === 'get_transfers' && !isRemote) {
+    await desktopGetChainHeight().catch(() => {});
+  }
+
   let lastErr;
   for (let attempt = 1; attempt <= RPC_MAX_ATTEMPTS; attempt++) {
     try {
-      return await attemptWalletRpc(url, method, params, timeoutMs);
+      const result = await attemptWalletRpc(url, method, rpcParams, timeoutMs);
+      // Dandelion++: route the created tx then strip tx_hex from result
+      if (isLocalTransfer && result && result.tx_hex && result.tx_hash) {
+        const { tx_hex, tx_hash } = result;
+        delete result.tx_hex;
+        desktopDandelionRoute(tx_hex, tx_hash).catch(() => {});
+      }
+      // Coinbase unlock window enforcement for local get_transfers
+      if (method === 'get_transfers' && !isRemote && result) {
+        desktopEnforceCoinbaseLock(result);
+      }
+      return result;
     } catch (e) {
       lastErr = e;
       const code = e.code || '';

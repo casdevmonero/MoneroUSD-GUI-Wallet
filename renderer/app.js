@@ -53,6 +53,8 @@ window.addEventListener('unhandledrejection', function(e) {
   // 1.0 USDm = 1e8 atomic units (8 decimal places, CRYPTONOTE_DISPLAY_DECIMAL_POINT = 8).
   const USDM_ATOMIC_UNIT = 1e8;
   const USDM_DECIMALS = 8;
+  // Coinbase (mining reward) outputs are locked for this many blocks before spending.
+  const COINBASE_UNLOCK_WINDOW = 10;
   const SWAP_HISTORY_KEY = 'monerousd_swap_history';
   const walletPasswordCache = new Map();
 
@@ -2290,17 +2292,23 @@ window.addEventListener('unhandledrejection', function(e) {
                   const icon = isMiningPayout ? '⛏' : t.type === 'in' ? '↓' : t.type === 'out' ? '↑' : '◐';
                   const label = isMiningPayout ? '<span class="tx-mining">Mining Payout</span> ' : '';
                   const conf = t.confirmations;
-                  const confLabel = t.type === 'pending' || t.type === 'pool'
-                    ? '<span class="tx-pending">Pending</span>'
-                    : conf !== undefined
-                      ? `<span class="tx-confirmed">${escHtml(conf)} conf</span>`
-                      : '';
+                  let confLabel;
+                  if (t.coinbase_locked) {
+                    const needed = t.confirmations_needed || (t.coinbase_unlocks_at - (t.height || 0));
+                    confLabel = `<span class="tx-pending" title="Coinbase outputs require ${COINBASE_UNLOCK_WINDOW} confirmations before spending">Locked (${needed} conf needed)</span>`;
+                  } else if (t.type === 'pending' || t.type === 'pool') {
+                    confLabel = '<span class="tx-pending">Pending</span>';
+                  } else if (conf !== undefined) {
+                    confLabel = `<span class="tx-confirmed">${escHtml(conf)} conf</span>`;
+                  } else {
+                    confLabel = '';
+                  }
                   const explorerBase = DEFAULT_EXPLORER_URL;
                   const safeTxid = escHtml(t.txid || '');
                   const txLink = t.txid
                     ? `<a href="${explorerBase}/tx/${safeTxid}" target="_blank" class="tx-link">${safeTxid.slice(0, 8)}…</a>`
                     : '';
-                  return `<div class="history-item${isMiningPayout ? ' history-item-mining' : ''}">
+                  return `<div class="history-item${isMiningPayout ? ' history-item-mining' : ''}${t.coinbase_locked ? ' history-item-locked' : ''}">
                     <span>${icon} ${label}${escHtml(formatAmount(t.amount))} ${escHtml(t.asset_type || ASSET_USDM)}</span>
                     <span>${confLabel} ${txLink}</span>
                   </div>`;
@@ -2328,7 +2336,9 @@ window.addEventListener('unhandledrejection', function(e) {
       return {
         icon: isMiningPayout ? '⛏' : isIn ? '↓' : t.type === 'out' ? '↑' : '◐',
         dirClass: isMiningPayout ? 'recent-item-mining' : isIn ? 'recent-item-in' : 'recent-item-out',
-        label: isMiningPayout ? 'Mining Payout' : isIn ? 'Received' : t.type === 'out' ? 'Sent' : 'Pending',
+        label: t.coinbase_locked
+          ? `Mining Payout (locked, ${t.confirmations_needed || '?'} blocks)`
+          : isMiningPayout ? 'Mining Payout' : isIn ? 'Received' : t.type === 'out' ? 'Sent' : 'Pending',
         amount: formatAmount(t.amount),
         asset: t.asset_type || ASSET_USDM,
         sign: isIn ? '+' : '-',

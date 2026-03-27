@@ -53,6 +53,7 @@ window.addEventListener('unhandledrejection', function(e) {
   // 1.0 USDm = 1e8 atomic units (8 decimal places, CRYPTONOTE_DISPLAY_DECIMAL_POINT = 8).
   const USDM_ATOMIC_UNIT = 1e8;
   const USDM_DECIMALS = 8;
+  const COINBASE_UNLOCK_WINDOW = 10;
   const USDM_BURN_CONFIRMATIONS = 6; // default; overridden by backend response
   const MINIMUM_FEE_USDM = 1000000n;  // 0.01 USDm in atomic units
   const FEE_DIVISOR = 1000n;           // 0.1% fee = amount / 1000
@@ -2291,19 +2292,25 @@ window.addEventListener('unhandledrejection', function(e) {
                   const icon = isMiningPayout ? '⛏' : t.type === 'in' ? '↓' : t.type === 'out' ? '↑' : '◐';
                   const label = isMiningPayout ? '<span class="tx-mining">Mining Payout</span> ' : '';
                   const conf = t.confirmations;
-                  const confLabel = t.type === 'pending' || t.type === 'pool'
-                    ? '<span class="tx-pending">\u23f3 Pending (0-conf)</span>'
-                    : conf !== undefined && conf === 0
-                      ? '<span class="tx-pending">\u23f3 Pending (0-conf)</span>'
-                    : conf !== undefined && conf >= 1
-                      ? `<span class="tx-confirmed">\u2705 Confirmed (${escHtml(conf)} block${conf > 1 ? 's' : ''})</span>`
-                      : '';
+                  let confLabel;
+                  if (t.coinbase_locked) {
+                    const needed = t.confirmations_needed || COINBASE_UNLOCK_WINDOW;
+                    confLabel = `<span class="tx-pending" title="Coinbase outputs require ${COINBASE_UNLOCK_WINDOW} confirmations">\uD83D\uDD12 Locked (${needed} blocks)</span>`;
+                  } else if (t.type === 'pending' || t.type === 'pool') {
+                    confLabel = '<span class="tx-pending">\u23f3 Pending (0-conf)</span>';
+                  } else if (conf !== undefined && conf === 0) {
+                    confLabel = '<span class="tx-pending">\u23f3 Pending (0-conf)</span>';
+                  } else if (conf !== undefined && conf >= 1) {
+                    confLabel = `<span class="tx-confirmed">\u2705 Confirmed (${escHtml(conf)} block${conf > 1 ? 's' : ''})</span>`;
+                  } else {
+                    confLabel = '';
+                  }
                   const explorerBase = DEFAULT_EXPLORER_URL;
                   const safeTxid = escHtml(t.txid || '');
                   const txLink = t.txid
                     ? `<a href="${explorerBase}/tx/${safeTxid}" target="_blank" class="tx-link">${safeTxid.slice(0, 8)}…</a>`
                     : '';
-                  return `<div class="history-item${isMiningPayout ? ' history-item-mining' : ''}">
+                  return `<div class="history-item${isMiningPayout ? ' history-item-mining' : ''}${t.coinbase_locked ? ' history-item-locked' : ''}">
                     <span>${icon} ${label}${escHtml(formatAmount(t.amount))} ${escHtml(t.asset_type || ASSET_USDM)}</span>
                     <span>${confLabel} ${txLink}</span>
                   </div>`;
@@ -2357,7 +2364,9 @@ window.addEventListener('unhandledrejection', function(e) {
       return {
         icon: isMiningPayout ? '⛏' : isIn ? '↓' : t.type === 'out' ? '↑' : '◐',
         dirClass: isMiningPayout ? 'recent-item-mining' : isIn ? 'recent-item-in' : 'recent-item-out',
-        label: isMiningPayout ? 'Mining Payout' : isIn ? 'Received' : t.type === 'out' ? 'Sent' : 'Pending',
+        label: t.coinbase_locked
+          ? `Mining Payout (locked, ${t.confirmations_needed || COINBASE_UNLOCK_WINDOW} blocks)`
+          : isMiningPayout ? 'Mining Payout' : isIn ? 'Received' : t.type === 'out' ? 'Sent' : 'Pending',
         amount: formatAmount(t.amount),
         asset: t.asset_type || ASSET_USDM,
         sign: isIn ? '+' : '-',

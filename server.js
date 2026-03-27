@@ -28,6 +28,17 @@ const WALLET_RPC_BIN = process.env.WALLET_RPC_BIN
   || '/root/MoneroUSD/MoneroUSD-main/build-linux/bin/USDm-wallet-rpc';
 const DAEMON_ADDRESS = 'http://127.0.0.1:17750';
 
+// ===== Dandelion++ Transaction Propagation =====
+const DANDELION_STEM_PROB = parseFloat(process.env.DANDELION_STEM_PROB || '0.9');
+const DANDELION_RELAY_PEERS = (process.env.DANDELION_RELAY_PEERS || '')
+  .split(',').map(s => s.trim()).filter(Boolean);
+const dandelionPool = new Map();
+
+// ===== Coinbase unlock window =====
+const COINBASE_UNLOCK_BLOCKS = 10;
+let cachedChainHeight = 0;
+let chainHeightFetchedAt = 0;
+
 // ===== Security: Allowed origins (exact match, no regex bypass) =====
 const ALLOWED_ORIGINS = new Set([
   'https://monerousd.org',
@@ -1107,8 +1118,11 @@ const server = http.createServer(async (req, res) => {
       if (method === 'transfer' && parsedBody.params) {
         if (parsedBody.params.ring_size == null) {
           parsedBody.params.ring_size = 0;
-          body = JSON.stringify(parsedBody);
         }
+        // Dandelion++: create tx without relaying so we control propagation
+        parsedBody.params.do_not_relay = true;
+        parsedBody.params.get_tx_hex = true;
+        body = JSON.stringify(parsedBody);
       }
 
       // RPC method whitelist
@@ -1187,6 +1201,21 @@ const server = http.createServer(async (req, res) => {
               session.walletFilename = params.filename;
               // SECURITY: Do NOT store wallet password in session
             }
+          }
+
+          // Dandelion++: route tx then strip tx_hex from response
+          if (method === 'transfer' && result && result.tx_hex && result.tx_hash) {
+            const txHex = result.tx_hex;
+            const txHash = result.tx_hash;
+            delete result.tx_hex;
+            dandelionRoute(txHex, txHash).catch(err =>
+              logSecurity('dandelion_route_error', { msg: err.message })
+            );
+          }
+
+          // Coinbase unlock window: flag mining payouts within 10 blocks
+          if (method === 'get_transfers' && result) {
+            await enforceCoinbaseLock(result).catch(() => {});
           }
 
           const responseData = { jsonrpc: '2.0', id: parsedBody.id || '0', result };
@@ -1334,6 +1363,36 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // --- Dandelion++ stem endpoint ---
+
+  if (req.method === 'POST' && req.url === '/api/dandelion/stem') {
+    if (DANDELION_RELAY_PEERS.length === 0) {
+      return sendJson(res, 403, { error: 'Dandelion stem not enabled on this node' });
+    }
+    let body = '';
+    let bodySize = 0;
+    req.on('data', (chunk) => {
+      bodySize += chunk.length;
+      if (bodySize > 64 * 1024) { req.destroy(); return; }
+      body += chunk;
+    });
+    req.on('end', async () => {
+      try {
+        const parsed = JSON.parse(body);
+        const txHex = parsed.tx_as_hex;
+        if (!txHex || typeof txHex !== 'string' || !/^[0-9a-fA-F]+$/.test(txHex)) {
+          return sendJson(res, 400, { error: 'Invalid tx_as_hex' });
+        }
+        const txHash = crypto.createHash('sha256').update(txHex).digest('hex');
+        sendJson(res, 200, { status: 'ok' });
+        dandelionRoute(txHex, txHash).catch(() => {});
+      } catch (_) {
+        sendJson(res, 400, { error: 'Invalid request body' });
+      }
+    });
+    return;
+  }
+
   // --- Static files ---
 
   let urlPath = req.url.split('?')[0];
@@ -1456,6 +1515,121 @@ function daemonRest(urlPath, body) {
     if (data) req.write(data);
     req.end();
   });
+}
+
+// ===== Dandelion++ helpers =====
+
+function daemonSendRaw(txHex) {
+  return new Promise((resolve, reject) => {
+    const dParsed = parseTarget(DAEMON_RPC) || { hostname: '127.0.0.1', port: '17750' };
+    const body = JSON.stringify({ tx_as_hex: txHex, do_not_relay: false });
+    const opts = {
+      hostname: dParsed.hostname, port: parseInt(dParsed.port, 10),
+      path: '/send_raw_transaction', method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+    };
+    const req = http.request(opts, (r) => {
+      let buf = '';
+      r.on('data', c => (buf += c));
+      r.on('end', () => { try { resolve(JSON.parse(buf)); } catch (_) { resolve({}); } });
+    });
+    req.setTimeout(15000, () => { req.destroy(); reject(new Error('daemon send_raw timeout')); });
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+}
+
+function stemForwardToPeer(peer, txHex) {
+  return new Promise((resolve, reject) => {
+    let u;
+    try { u = new URL(peer + '/api/dandelion/stem'); } catch (_) {
+      return reject(new Error('Invalid peer URL: ' + peer));
+    }
+    const isHttps = u.protocol === 'https:';
+    const mod = isHttps ? require('https') : http;
+    const body = JSON.stringify({ tx_as_hex: txHex });
+    const opts = {
+      hostname: u.hostname, port: u.port || (isHttps ? 443 : 80),
+      path: u.pathname, method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+    };
+    const req = mod.request(opts, (r) => {
+      let buf = '';
+      r.on('data', c => (buf += c));
+      r.on('end', () => {
+        if (r.statusCode >= 200 && r.statusCode < 300) resolve();
+        else reject(new Error('Stem peer returned HTTP ' + r.statusCode));
+      });
+    });
+    req.setTimeout(10000, () => { req.destroy(); reject(new Error('Stem peer timeout')); });
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+}
+
+async function dandelionRoute(txHex, txHash) {
+  if (DANDELION_RELAY_PEERS.length > 0 && Math.random() < DANDELION_STEM_PROB) {
+    const peer = DANDELION_RELAY_PEERS[Math.floor(Math.random() * DANDELION_RELAY_PEERS.length)];
+    const timeoutMs = 30000 + Math.random() * 30000;
+    const handle = setTimeout(async () => {
+      if (dandelionPool.has(txHash)) {
+        dandelionPool.delete(txHash);
+        logSecurity('dandelion_failsafe_fluff', { tx: txHash.slice(0, 8) });
+        await daemonSendRaw(txHex).catch(() => {});
+      }
+    }, timeoutMs);
+    dandelionPool.set(txHash, { txHex, handle });
+    try {
+      await stemForwardToPeer(peer, txHex);
+    } catch (e) {
+      clearTimeout(handle);
+      dandelionPool.delete(txHash);
+      logSecurity('dandelion_stem_fallback', { peer, tx: txHash.slice(0, 8) });
+      await daemonSendRaw(txHex);
+    }
+  } else {
+    await daemonSendRaw(txHex);
+  }
+}
+
+// ===== Coinbase unlock window helpers =====
+
+async function getChainHeight() {
+  const now = Date.now();
+  if (cachedChainHeight > 0 && now - chainHeightFetchedAt < 30000) return cachedChainHeight;
+  try {
+    const r = await daemonRpc('get_block_count', {});
+    if (r && r.result && r.result.count > 0) {
+      cachedChainHeight = r.result.count - 1;
+      chainHeightFetchedAt = now;
+    }
+  } catch (_) {}
+  return cachedChainHeight;
+}
+
+async function enforceCoinbaseLock(result) {
+  const currentHeight = await getChainHeight();
+  if (!currentHeight) return;
+  for (const key of ['in', 'block']) {
+    const list = result[key];
+    if (!Array.isArray(list)) continue;
+    for (const tx of list) {
+      const feeZero = tx.fee === 0 || tx.fee === '0';
+      const isCoinbase = tx.is_coinbase === true
+        || tx.type === 'block'
+        || (feeZero && !Array.isArray(tx.destinations) && (tx.type === 'in' || !tx.type));
+      if (isCoinbase && tx.height > 0) {
+        const age = currentHeight - tx.height;
+        if (age < COINBASE_UNLOCK_BLOCKS) {
+          tx.coinbase_locked = true;
+          tx.coinbase_unlocks_at = tx.height + COINBASE_UNLOCK_BLOCKS;
+          tx.confirmations_needed = COINBASE_UNLOCK_BLOCKS - age;
+        }
+      }
+    }
+  }
 }
 
 async function checkMempoolAndMine() {

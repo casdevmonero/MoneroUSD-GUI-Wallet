@@ -32,6 +32,15 @@ const BTC_RESERVE_ADDRESS = process.env.BTC_RESERVE_ADDRESS || 'bc1qukurxzulh6h3
 const XMR_RESERVE_ADDRESS = process.env.XMR_RESERVE_ADDRESS || '49W1wHiiYPsSneF6f1umpJ2Gqgwx7xwVP6KH27Q7p5B8jXHVe8CgwDBEALHSMK9BREK3EqExsLXzmehzsJqGbHHw5XXHCwa';
 const USDM_BURN_ADDRESS = process.env.USDM_BURN_ADDRESS || 'MpxaejfYy7Wf9UHdXY1mQgE3BrejxQy13829HmhuDeEs57SxPuKF28gRZy9wCvuG2Qhxi71r2z5CH9FqBULX6dBC5QfgmoN';
 
+// Yield wallet — holds the yield pool; receives loan interest allocation (40%);
+// staking service pays stakers from this wallet via its RPC at port 27751.
+const YIELD_WALLET_ADDRESS = process.env.YIELD_WALLET_ADDRESS || 'MmaBHaf2yqy6qc8CPgEYhxZo4J3x69Qa5GH7Pf2uantqB1kdMX9inLDVShrhoFCS79RfvLtXLGq66495SPTnmShJUqBqCY3';
+
+// Yield wallet RPC — used to transfer yield to stakers on claim/unstake
+const YIELD_WALLET_RPC_URL = process.env.YIELD_WALLET_RPC_URL || 'http://127.0.0.1:27751';
+const YIELD_WALLET_RPC_USER = process.env.YIELD_WALLET_RPC_USER || '';
+const YIELD_WALLET_RPC_PASS = process.env.YIELD_WALLET_RPC_PASS || '';
+
 // Wallet RPCs for collateral release
 const XMR_WALLET_RPC_URL = process.env.XMR_WALLET_RPC_URL || '';
 const XMR_WALLET_RPC_USER = process.env.XMR_WALLET_RPC_USER || '';
@@ -347,17 +356,36 @@ async function getDaemonHeight() {
 }
 
 // --- Yield Pool Integration ---
+// Routes 40% of loan interest to the yield wallet (MmaBHaf…) via its RPC.
+// The yield wallet is the protocol-controlled pool that pays staking rewards.
+
+function yieldWalletRpcCall(method, params) {
+  return fetchJson(YIELD_WALLET_RPC_URL.replace(/\/$/, '') + '/json_rpc', {
+    method: 'POST',
+    headers: YIELD_WALLET_RPC_USER || YIELD_WALLET_RPC_PASS ? {
+      Authorization: 'Basic ' + Buffer.from(`${YIELD_WALLET_RPC_USER}:${YIELD_WALLET_RPC_PASS}`).toString('base64'),
+    } : {},
+    body: { jsonrpc: '2.0', id: '0', method, params: params || {} },
+    timeoutMs: 15000,
+  }).then((r) => {
+    if (r && r.error) throw new Error(r.error.message || 'yield RPC error');
+    return r ? r.result : null;
+  });
+}
 
 async function addToYieldPool(atomicAmount) {
   if (atomicAmount <= 0n) return;
   try {
-    await fetchJson(`${SWAP_SERVICE_URL}/api/internal/yield-deposit`, {
-      method: 'POST',
-      body: { amount_atomic: atomicAmount.toString() },
-      timeoutMs: 10000,
+    // Transfer USDm directly to the yield wallet address from the lending wallet RPC.
+    // The yield wallet (MmaBHaf…) accumulates these funds; stakers withdraw from it on claim.
+    await yieldWalletRpcCall('transfer', {
+      destinations: [{ amount: atomicAmount.toString(), address: YIELD_WALLET_ADDRESS }],
+      priority: 1,
+      ring_size: 0,
     });
-    console.log(`[yield] ${Number(atomicAmount) / 1e8} USDm deposited to yield pool`);
+    console.log(`[yield] ${Number(atomicAmount) / 1e8} USDm sent to yield wallet ${YIELD_WALLET_ADDRESS.slice(0, 12)}…`);
   } catch (e) {
+    // Log but don't crash — yield deposit failure shouldn't block loan repayment
     console.error('[yield] Failed to deposit to yield pool:', e.message);
   }
 }

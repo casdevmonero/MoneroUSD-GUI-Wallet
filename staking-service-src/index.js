@@ -19,7 +19,9 @@ const BIND_HOST = process.env.STAKING_BIND_HOST || '0.0.0.0';
 const DATA_DIR = path.join(__dirname, 'data');
 const STATE_FILE = path.join(DATA_DIR, 'stakes.json');
 
-// Wallet RPC for the staking service (manages yield pool wallet)
+// Yield wallet — protocol-controlled wallet that holds the yield pool.
+// Stakers' claims are paid out FROM this wallet via its RPC.
+const YIELD_WALLET_ADDRESS = process.env.YIELD_WALLET_ADDRESS || 'MmaBHaf2yqy6qc8CPgEYhxZo4J3x69Qa5GH7Pf2uantqB1kdMX9inLDVShrhoFCS79RfvLtXLGq66495SPTnmShJUqBqCY3';
 const YIELD_WALLET_RPC_URL = process.env.YIELD_WALLET_RPC_URL || 'http://127.0.0.1:27751';
 const YIELD_WALLET_RPC_USER = process.env.YIELD_WALLET_RPC_USER || '';
 const YIELD_WALLET_RPC_PASS = process.env.YIELD_WALLET_RPC_PASS || '';

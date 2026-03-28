@@ -651,11 +651,19 @@ async function liquidateLoan(loan, currentPrice) {
 
   const interestAtomic = BigInt(loan.interest_accrued_atomic);
   if (interestAtomic > 0n) {
-    const yieldPortion = interestAtomic * BigInt(Math.round(INTEREST_ALLOC_YIELD * 100)) / 100n;
-    await addToYieldPool(yieldPortion).catch(() => {});
+    const yieldPortion = interestAtomic * 40n / 100n;
+    const burnPortion  = interestAtomic - yieldPortion;
+    if (yieldPortion > 0n) await addToYieldPool(yieldPortion).catch(() => {});
+    if (burnPortion > 0n) {
+      await yieldWalletRpcCall('transfer', {
+        destinations: [{ amount: burnPortion.toString(), address: USDM_BURN_ADDRESS }],
+        priority: 1, ring_size: 0,
+      }).catch((e) => console.error('[reserve-burn] Liquidation burn failed:', e.message));
+      console.log(`[reserve-burn] Burned ${Number(burnPortion) / 1e8} USDm from liquidation — reserve ratio improved`);
+    }
   }
-
-  console.log(`[liquidation] Loan ${loan.id} liquidated at $${currentPrice} — penalty $${loan.liquidation_penalty_usd} to reserves`);
+  // Collateral (BTC/XMR) stays in reserve wallets — permanent reserve growth from liquidation.
+  console.log(`[liquidation] Loan ${loan.id} liquidated at $${currentPrice} — penalty $${loan.liquidation_penalty_usd}, collateral retained in reserves`);
 }
 
 // --- Repayment ---
@@ -719,10 +727,27 @@ async function verifyRepayment(loan) {
         loan.status = 'repaid';
         loan.updated_at = nowIso();
 
-        // Distribute interest: 50% reserves, 40% yield, 10% ops
+        // Distribute interest to grow reserves and fund staking yield.
+        // 50% burned → permanently removes USDm from circulation, reserve ratio improves.
+        // 40% to yield wallet → funds staking payouts.
+        // 10% burned alongside reserves (ops reserve until ops wallet is configured).
         const interestAtomic = BigInt(loan.interest_accrued_atomic);
-        const yieldPortion = interestAtomic * 40n / 100n;
-        await addToYieldPool(yieldPortion);
+        const yieldPortion   = interestAtomic * 40n / 100n;  // 40% → yield wallet
+        const burnPortion    = interestAtomic - yieldPortion; // 60% burned (50% reserves + 10% ops)
+
+        // Send yield portion to yield wallet so stakers can claim it
+        if (yieldPortion > 0n) await addToYieldPool(yieldPortion);
+
+        // Burn the reserve portion — reduces circulating USDm supply permanently.
+        // BTC/XMR collateral stays in reserve wallets → reserve ratio improves.
+        if (burnPortion > 0n) {
+          await yieldWalletRpcCall('transfer', {
+            destinations: [{ amount: burnPortion.toString(), address: USDM_BURN_ADDRESS }],
+            priority: 1,
+            ring_size: 0,
+          }).catch((e) => console.error('[reserve-burn] Failed to burn reserve interest:', e.message));
+          console.log(`[reserve-burn] Burned ${Number(burnPortion) / 1e8} USDm interest — reserve ratio improved`);
+        }
 
         state.total_interest_earned = String(
           BigInt(state.total_interest_earned) + interestAtomic

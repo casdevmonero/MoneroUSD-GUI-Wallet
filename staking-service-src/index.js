@@ -30,6 +30,9 @@ const DAEMON_RPC_URL = process.env.DAEMON_RPC_URL || 'http://127.0.0.1:17750';
 // Swap service for yield pool balance
 const SWAP_SERVICE_URL = process.env.SWAP_SERVICE_URL || 'http://127.0.0.1:8787';
 
+// Lending service for daily interest cap: min(owed, loan_interest_today)
+const LENDING_SERVICE_URL = process.env.LENDING_SERVICE_URL || 'http://127.0.0.1:8789';
+
 const USDM_DECIMALS = 8;
 const COIN = 10n ** 8n;
 const BLOCKS_PER_DAY = 720; // 120s block time -> 720 blocks/day
@@ -158,6 +161,16 @@ async function getYieldPoolBalance() {
   try {
     const r = await fetchJson(`${SWAP_SERVICE_URL}/api/reserves`, { timeoutMs: 8000 });
     return BigInt(r && r.yield_pool_atomic ? r.yield_pool_atomic : '0');
+  } catch (_) { return 0n; }
+}
+
+// Fetch today's loan interest from lending service.
+// Used for: min(owed, loan_interest_today) payout cap.
+// Never mints fresh — yield only flows from what loans actually earned.
+async function getLoanInterestToday() {
+  try {
+    const r = await fetchJson(`${LENDING_SERVICE_URL}/api/lending/daily-interest`, { timeoutMs: 8000 });
+    return BigInt(r && r.daily_interest_atomic ? r.daily_interest_atomic : '0');
   } catch (_) { return 0n; }
 }
 
@@ -293,16 +306,20 @@ async function distributeYield() {
     return;
   }
 
-  // Get available yield pool balance
+  // Get available yield pool balance and today's loan interest
   const yieldPool = await getYieldPoolBalance();
-  if (yieldPool <= 0n) {
-    console.log('[yield] Yield pool empty — skipping distribution');
+  // min(owed, loan_interest_today): yield paid out never exceeds what loans actually earned today.
+  // This ensures staking payouts are fully funded — no fresh USDm minted.
+  const loanInterestToday = await getLoanInterestToday();
+
+  if (yieldPool <= 0n && loanInterestToday <= 0n) {
+    console.log('[yield] Yield pool empty and no loan interest today — skipping distribution');
     state.last_distribution_block = currentHeight;
     saveState(state);
     return;
   }
 
-  // Compute yield for each stake
+  // Compute yield owed to each stake based on APR
   const distributions = [];
   let totalYieldNeeded = 0n;
 
@@ -314,9 +331,7 @@ async function distributeYield() {
     const blocksActive = currentHeight - (state.last_distribution_block || stake.start_block);
     if (blocksActive <= 0) continue;
 
-    // daily_yield = stake_amount * apr / 365
-    // block_yield = daily_yield / BLOCKS_PER_DAY * blocksActive
-    // Using integer math: yield = stakeAmount * apr_bps * blocksActive / (10000 * BLOCKS_PER_YEAR)
+    // yield = stakeAmount * apr_bps * blocksActive / (10000 * BLOCKS_PER_YEAR)
     const aprBps = BigInt(Math.round(tierConfig.apr * 10000));
     const yieldAmount = (stakeAmount * aprBps * BigInt(blocksActive)) / (10000n * BigInt(BLOCKS_PER_YEAR));
 
@@ -332,20 +347,23 @@ async function distributeYield() {
     return;
   }
 
-  // Scale down if yield pool can't cover full payout (keeps protocol solvent)
+  // Apply min(owed, loan_interest_today) cap — never pay more yield than interest earned today.
+  // Then also cap at available yield pool so we don't overdraw reserves.
+  const maxByInterest = loanInterestToday > 0n ? loanInterestToday : yieldPool;
+  const maxPayout = maxByInterest < yieldPool ? maxByInterest : yieldPool;
+
   let scaleFactor = 1.0;
-  if (totalYieldNeeded > yieldPool) {
-    scaleFactor = Number(yieldPool) / Number(totalYieldNeeded);
-    console.log(`[yield] Yield pool insufficient — scaling payouts to ${(scaleFactor * 100).toFixed(1)}%`);
+  if (totalYieldNeeded > maxPayout) {
+    scaleFactor = Number(maxPayout) / Number(totalYieldNeeded);
+    console.log(`[yield] Capping payouts to ${(scaleFactor * 100).toFixed(1)}% (owed=${Number(totalYieldNeeded) / 1e8} interest_today=${Number(loanInterestToday) / 1e8} pool=${Number(yieldPool) / 1e8})`);
   }
 
-  // Process distributions
+  // Process distributions — accrue yield (actual transfer on unstake or claim)
   let totalPaid = 0n;
   for (const { stake, yieldAmount } of distributions) {
     const scaled = BigInt(Math.floor(Number(yieldAmount) * scaleFactor));
     if (scaled <= 0n) continue;
 
-    // Accrue yield (actual transfer happens on unstake or claim)
     stake.yield_earned_atomic = String(BigInt(stake.yield_earned_atomic) + scaled);
     stake.updated_at = nowIso();
     totalPaid += scaled;

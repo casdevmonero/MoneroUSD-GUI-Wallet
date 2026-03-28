@@ -94,32 +94,20 @@ function ensureDir(dir) {
 
 function loadState() {
   ensureDir(DATA_DIR);
-  if (!fs.existsSync(STATE_FILE)) {
-    return {
-      loans: {},
-      total_loaned_usdm: '0',
-      total_interest_earned: '0',
-      last_interest_block: 0,
-      last_liquidation_check: 0,
-    };
-  }
+  const defaults = {
+    loans: {},
+    total_loaned_usdm: '0',
+    total_interest_earned: '0',
+    last_interest_block: 0,
+    last_liquidation_check: 0,
+    last_daily_interest_atomic: '0',  // interest accrued in the most recent daily cycle
+  };
+  if (!fs.existsSync(STATE_FILE)) return defaults;
   try {
     const raw = fs.readFileSync(STATE_FILE, 'utf8');
-    return raw ? JSON.parse(raw) : {
-      loans: {},
-      total_loaned_usdm: '0',
-      total_interest_earned: '0',
-      last_interest_block: 0,
-      last_liquidation_check: 0,
-    };
+    return raw ? Object.assign({}, defaults, JSON.parse(raw)) : defaults;
   } catch (_) {
-    return {
-      loans: {},
-      total_loaned_usdm: '0',
-      total_interest_earned: '0',
-      last_interest_block: 0,
-      last_liquidation_check: 0,
-    };
+    return defaults;
   }
 }
 
@@ -751,6 +739,9 @@ async function accrueInterest() {
 
   const daysFraction = blocksSinceLast / BLOCKS_PER_YEAR;
 
+  // Snapshot pre-cycle interest to compute cycle delta for staking payout cap
+  const preInterestMap = new Map(activeLoans.map((l) => [l.id, BigInt(l.interest_accrued_atomic)]));
+
   for (const loan of activeLoans) {
     const rate = computeInterestRate(loan.collateral_asset, utilizationRatio);
     const principal = Number(BigInt(loan.loan_usdm_atomic)) / 1e8;
@@ -764,9 +755,15 @@ async function accrueInterest() {
     loan.updated_at = nowIso();
   }
 
+  // Record total interest accrued this cycle for staking payout cap: min(owed, loan_interest_today)
+  let cycleInterest = 0n;
+  for (const loan of activeLoans) {
+    cycleInterest += BigInt(loan.interest_accrued_atomic) - (preInterestMap.get(loan.id) || 0n);
+  }
+  state.last_daily_interest_atomic = cycleInterest.toString();
   state.last_interest_block = currentHeight;
   saveState(state);
-  console.log(`[interest] Accrued interest on ${activeLoans.length} loans (util=${(utilizationRatio * 100).toFixed(1)}%)`);
+  console.log(`[interest] Accrued interest on ${activeLoans.length} loans (util=${(utilizationRatio * 100).toFixed(1)}%, cycle=${(Number(cycleInterest) / 1e8).toFixed(8)} USDm)`);
 }
 
 // --- Processing Loop ---
@@ -854,6 +851,16 @@ const server = http.createServer(async (req, res) => {
   // Health check
   if (req.method === 'GET' && url.pathname === '/api/health') {
     sendJson(res, 200, { ok: true });
+    return;
+  }
+
+  // Daily interest — used by staking service for min(owed, loan_interest_today) payout cap
+  if (req.method === 'GET' && url.pathname === '/api/lending/daily-interest') {
+    const atomic = state.last_daily_interest_atomic || '0';
+    sendJson(res, 200, {
+      daily_interest_atomic: atomic,
+      daily_interest_usdm: (Number(BigInt(atomic)) / 1e8).toFixed(8),
+    });
     return;
   }
 

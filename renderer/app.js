@@ -3676,8 +3676,10 @@ window.addEventListener('unhandledrejection', function(e) {
         showMessage('sendMessage', 'Invalid amount.', true);
         return;
       }
+      // Estimate fee from daemon; fall back to 0.1% minimum if daemon unreachable
+      const estimatedFee = await estimateTxFeeFromDaemon(priority);
+      let available = 0n;
       try {
-        let available = 0n;
         const { parsed } = await fetchUsdmBalance();
         available = parsed.unlocked_balance > 0n ? parsed.unlocked_balance : parsed.balance;
         if (available === 0n) {
@@ -3687,7 +3689,13 @@ window.addEventListener('unhandledrejection', function(e) {
             if (incomingAvailable > available) available = incomingAvailable;
           } catch (_) {}
         }
-        if (available < amountAtomic) {
+        // Check balance covers amount + estimated fee
+        if (available > 0n && available < amountAtomic + estimatedFee) {
+          updateSendBalanceHint(amountStr);
+          showMessage('sendMessage', 'Insufficient balance to cover amount + fee (~$' + formatAmount(estimatedFee) + ').', true);
+          return;
+        }
+        if (available > 0n && available < amountAtomic) {
           updateSendBalanceHint(amountStr);
           showMessage('sendMessage', 'Insufficient USDm balance.', true);
           return;
@@ -3699,7 +3707,8 @@ window.addEventListener('unhandledrejection', function(e) {
       const addrEnd = address.slice(-8);
       const confirmMsg = 'Confirm Transaction\n\n'
         + 'To: ' + addrStart + '…' + addrEnd + '\n'
-        + 'Amount: ' + formattedAmount + '\n\n'
+        + 'Amount: ' + formattedAmount + '\n'
+        + 'Est. network fee: ~$' + formatAmount(estimatedFee) + ' (paid from balance)\n\n'
         + 'Are you sure you want to send this transaction?';
       if (!confirm(confirmMsg)) {
         showMessage('sendMessage', 'Transaction cancelled.', false);
@@ -3715,7 +3724,9 @@ window.addEventListener('unhandledrejection', function(e) {
       }
       showMessage('sendMessage', 'Sending…');
       try {
-        const amount = Number(amountAtomic);
+        // Pass amount as string — jsonStringifyRpc converts "amount":"<n>" → "amount":<n>
+        // so the wallet-rpc receives a proper uint64 without JS Number precision loss.
+        const amount = amountAtomic.toString();
         const txResult = await rpcImmediate('transfer', {
           destinations: [{ amount: amount, address: address }],
           priority: priority,
@@ -3723,7 +3734,7 @@ window.addEventListener('unhandledrejection', function(e) {
           get_tx_key: true,
           get_tx_hex: false,
           get_tx_metadata: false,
-        }, { bioToken });
+        }, { bioToken, timeoutMs: 180000 });
         const txHash = txResult && (txResult.tx_hash || txResult.txid) || '';
         const explorerBase = DEFAULT_EXPLORER_URL;
         const sendMsgEl = document.getElementById('sendMessage');

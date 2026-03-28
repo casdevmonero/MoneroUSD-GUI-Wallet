@@ -42,6 +42,86 @@ let chainHeightFetchedAt = 0;
 // ===== Reserve Health =====
 const SWAP_BACKEND_URL = process.env.SWAP_BACKEND_URL || 'http://127.0.0.1:8787';
 const RESERVE_MIN_RATIO = 1.50;
+
+// ===== Block Reward (Dynamic) =====
+// Miners earn from treasury: min(yield_pool / (720 × 30), 1 USDm) per block.
+// Scales with swap volume — zero when treasury is empty (no unbacked issuance).
+const BLOCKS_PER_DAY = 720;
+const BLOCK_REWARD_WINDOW = BLOCKS_PER_DAY * 30;  // ~1 month of blocks
+const MAX_BLOCK_REWARD_ATOMIC = 100000000n;         // 1 USDm = 1e8 atomic
+const YIELD_WALLET_RPC_URL = process.env.YIELD_WALLET_RPC_URL || 'http://127.0.0.1:27751';
+const YIELD_WALLET_RPC_USER = process.env.YIELD_WALLET_RPC_USER || '';
+const YIELD_WALLET_RPC_PASS = process.env.YIELD_WALLET_RPC_PASS || '';
+
+async function fetchYieldPoolBalance() {
+  try {
+    const r = await new Promise((resolve, reject) => {
+      const u = new URL(SWAP_BACKEND_URL);
+      const req = http.request({
+        hostname: u.hostname, port: u.port || 80, path: '/api/reserves', method: 'GET',
+        headers: { 'Content-Type': 'application/json' },
+      }, (res) => {
+        let buf = '';
+        res.on('data', (c) => (buf += c));
+        res.on('end', () => { try { resolve(JSON.parse(buf)); } catch (_) { resolve(null); } });
+      });
+      req.setTimeout(8000, () => { req.destroy(); reject(new Error('timeout')); });
+      req.on('error', reject);
+      req.end();
+    });
+    return r && r.yield_pool_atomic ? BigInt(r.yield_pool_atomic) : 0n;
+  } catch (_) { return 0n; }
+}
+
+function computeBlockReward(yieldPool) {
+  if (yieldPool <= 0n) return 0n;
+  const reward = yieldPool / BigInt(BLOCK_REWARD_WINDOW);
+  return reward > MAX_BLOCK_REWARD_ATOMIC ? MAX_BLOCK_REWARD_ATOMIC : reward;
+}
+
+async function yieldWalletRpc(method, params) {
+  return new Promise((resolve, reject) => {
+    const body = JSON.stringify({ jsonrpc: '2.0', id: '0', method, params: params || {} });
+    const u = new URL(YIELD_WALLET_RPC_URL);
+    const headers = { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) };
+    if (YIELD_WALLET_RPC_USER || YIELD_WALLET_RPC_PASS)
+      headers.Authorization = 'Basic ' + Buffer.from(YIELD_WALLET_RPC_USER + ':' + YIELD_WALLET_RPC_PASS).toString('base64');
+    const req = http.request({
+      hostname: u.hostname, port: u.port || 80, path: '/json_rpc', method: 'POST', headers,
+    }, (res) => {
+      let buf = '';
+      res.on('data', (c) => (buf += c));
+      res.on('end', () => {
+        try {
+          const d = JSON.parse(buf);
+          if (d && d.error) return reject(new Error(d.error.message || 'yield wallet RPC error'));
+          resolve(d ? d.result : null);
+        } catch (_) { resolve(null); }
+      });
+    });
+    req.setTimeout(15000, () => { req.destroy(); reject(new Error('yield wallet RPC timeout')); });
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+}
+
+async function payBlockReward(toAddress) {
+  if (!toAddress) return;
+  try {
+    const yieldPool = await fetchYieldPoolBalance();
+    const reward = computeBlockReward(yieldPool);
+    if (reward <= 0n) return;
+    await yieldWalletRpc('transfer', {
+      destinations: [{ amount: String(reward), address: toAddress }],
+      priority: 1,
+      ring_size: 0,
+    });
+    console.log('  Block reward: sent ' + (Number(reward) / 1e8).toFixed(8) + ' USDm to ' + toAddress.slice(0, 12) + '… (treasury=' + (Number(yieldPool) / 1e8).toFixed(2) + ')');
+  } catch (e) {
+    console.log('  Block reward: skipped — ' + e.message);
+  }
+}
 let cachedReserveRatio = null;
 let reserveRatioFetchedAt = 0;
 
@@ -1720,7 +1800,12 @@ async function checkMempoolAndMine() {
     }
 
     await daemonRest('/stop_mining').catch(() => {});
-    if (!mined) console.log('  Auto-mine: mining started but no new block detected');
+    if (!mined) {
+      console.log('  Auto-mine: mining started but no new block detected');
+    } else if (MINER_ADDRESS) {
+      // Pay dynamic block reward from treasury after successful mine
+      payBlockReward(MINER_ADDRESS).catch(() => {});
+    }
   } catch (e) {
     daemonRest('/stop_mining').catch(() => {});
   } finally {

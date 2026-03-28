@@ -5391,9 +5391,17 @@ window.addEventListener('unhandledrejection', function(e) {
         let restoredFresh = false;
         let result;
         const userHeight = restoreHeight || 0;
-        // Restore wallet from block 0 (or user-specified height) so all transactions are found.
-        // rescan_blockchain does not work reliably on this wallet-rpc, so we always restore
-        // at the correct height from the start.
+        // Always delete any existing wallet cache first so the flow is identical every time.
+        try {
+          if (window.electronAPI && window.electronAPI.relayFetch) {
+            await window.electronAPI.relayFetch(getRpcUrl(), '/delete_wallet_cache', 'POST', { filename: filename });
+          } else {
+            await fetch(getFetchUrl() + '/delete_wallet_cache', {
+              method: 'POST', headers: getRpcHeaders(), credentials: 'same-origin',
+              body: JSON.stringify({ filename: filename }),
+            });
+          }
+        } catch (_) {}
         try {
           showMessage('importMessage', 'Creating wallet…', false);
           result = await rpcImmediate('restore_deterministic_wallet', {
@@ -5403,7 +5411,7 @@ window.addEventListener('unhandledrejection', function(e) {
             restore_height: userHeight,
             language: language,
             autosave_current: true,
-          }, { timeoutMs: 30000 });
+          }, { timeoutMs: 120000 });
           restoredFresh = true;
         } catch (restoreErr) {
           const restoreMsg = String((restoreErr && restoreErr.message) || '');
@@ -5981,9 +5989,17 @@ window.addEventListener('unhandledrejection', function(e) {
           const userRestoreHeight = restoreHeight || 0;
           let restoredFresh = false;
 
-          // Restore wallet from block 0 (or user-specified height) so all transactions are found.
-          // rescan_blockchain does not work reliably on this wallet-rpc, so we always restore
-          // at the correct height from the start.
+          // Always delete any existing wallet cache first so the flow is identical every time.
+          try {
+            if (window.electronAPI && window.electronAPI.relayFetch) {
+              await window.electronAPI.relayFetch(getRpcUrl(), '/delete_wallet_cache', 'POST', { filename: filename });
+            } else {
+              await fetch(getFetchUrl() + '/delete_wallet_cache', {
+                method: 'POST', headers: getRpcHeaders(), credentials: 'same-origin',
+                body: JSON.stringify({ filename: filename }),
+              });
+            }
+          } catch (_) {}
           try {
             showSyncStatus('Creating wallet…', true);
             await rpcNoRetry('restore_deterministic_wallet', {
@@ -5993,7 +6009,7 @@ window.addEventListener('unhandledrejection', function(e) {
               restore_height: userRestoreHeight,
               language: 'English',
               autosave_current: false,
-            }, { timeoutMs: 30000 });
+            }, { timeoutMs: 120000 });
             restoredFresh = true;
           } catch (e) {
             const em = String(e && e.message || '');

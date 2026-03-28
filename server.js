@@ -1,6 +1,7 @@
 /**
  * Serve the wallet UI in the browser and proxy JSON-RPC to per-user USDm-wallet-rpc instances.
  * Each browser session gets its own wallet-rpc process on a unique port.
+ * Uses CakeWallet-style WalletRpcManager for state management, health monitoring, and reconnection.
  * Run: node server.js
  * Then open: http://localhost:3000
  */
@@ -9,6 +10,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
+const WalletRpcManager = require('./rpc');
 
 // WebAuthn/FIDO2 biometric authentication
 const {
@@ -27,20 +29,52 @@ const WALLET_RPC_BIN = process.env.WALLET_RPC_BIN
 const DAEMON_ADDRESS = 'http://127.0.0.1:17750';
 
 // ===== Dandelion++ Transaction Propagation =====
-// Stem phase routes each transaction through a single peer before network
-// broadcast, making it harder to link transactions to originating IPs.
-// Set DANDELION_RELAY_PEERS=https://peer1.example.com,https://peer2.example.com
-// to enable stem forwarding. Without peers, all txs go straight to fluff.
 const DANDELION_STEM_PROB = parseFloat(process.env.DANDELION_STEM_PROB || '0.9');
 const DANDELION_RELAY_PEERS = (process.env.DANDELION_RELAY_PEERS || '')
   .split(',').map(s => s.trim()).filter(Boolean);
-// Active stem transactions: txHash -> { txHex, handle }
 const dandelionPool = new Map();
 
 // ===== Coinbase unlock window =====
 const COINBASE_UNLOCK_BLOCKS = 10;
 let cachedChainHeight = 0;
 let chainHeightFetchedAt = 0;
+
+// ===== Reserve Health =====
+const SWAP_BACKEND_URL = process.env.SWAP_BACKEND_URL || 'http://127.0.0.1:8787';
+const RESERVE_MIN_RATIO = 1.50;
+let cachedReserveRatio = null;
+let reserveRatioFetchedAt = 0;
+
+async function fetchReserveRatio() {
+  const now = Date.now();
+  if (cachedReserveRatio !== null && now - reserveRatioFetchedAt < 60000) return cachedReserveRatio;
+  try {
+    const body = JSON.stringify({});
+    const u = new URL(SWAP_BACKEND_URL);
+    const r = await new Promise((resolve, reject) => {
+      const req = http.request({
+        hostname: u.hostname, port: u.port || 80,
+        path: '/api/reserves', method: 'GET',
+        headers: { 'Content-Type': 'application/json' },
+      }, (res) => {
+        let buf = '';
+        res.on('data', (c) => (buf += c));
+        res.on('end', () => { try { resolve(JSON.parse(buf)); } catch (_) { resolve(null); } });
+      });
+      req.setTimeout(8000, () => { req.destroy(); reject(new Error('timeout')); });
+      req.on('error', reject);
+      req.end();
+    });
+    if (r && r.total_reserve_usd != null && r.total_swap_minted_usdm != null) {
+      const reserveUsd = parseFloat(r.total_reserve_usd);
+      const mintedUsdm = parseFloat(r.total_swap_minted_usdm);
+      cachedReserveRatio = mintedUsdm > 0 ? reserveUsd / mintedUsdm : null;
+      reserveRatioFetchedAt = now;
+      return cachedReserveRatio;
+    }
+  } catch (_) {}
+  return null;
+}
 
 // ===== Security: Allowed origins (exact match, no regex bypass) =====
 const ALLOWED_ORIGINS = new Set([
@@ -209,7 +243,7 @@ function validateOrigin(req) {
 const SESSION_PORT_START = 28000;
 const SESSION_PORT_END   = 28999;
 const MAX_SESSIONS       = 200;
-const SESSION_IDLE_MS    = 4 * 60 * 60 * 1000;  // 4 hr idle timeout (wallet-rpc is lightweight when idle)
+const SESSION_IDLE_MS    = 4 * 60 * 60 * 1000;  // 4 hr idle timeout — desktop wallets stay open for hours
 const SESSION_DIR_BASE   = '/var/lib/monerousd/sessions'; // Moved from /tmp for security (restricted permissions)
 const CLEANUP_INTERVAL   = 60 * 1000;       // check every 60s
 const SESSION_MAX_AGE_MS = 12 * 60 * 60 * 1000; // 12 hr absolute session timeout
@@ -382,158 +416,18 @@ async function waitForWalletRpc(port, maxRetries) {
   return false;
 }
 
-const MAX_AUTO_RESTARTS = 3;
-const AUTO_RESTART_WINDOW_MS = 60000; // reset counter after 1 min of stability
-
+// Auto-restart is now handled by WalletRpcManager internally.
+// The manager's health monitor detects failures, triggers reconnection,
+// and restarts the process if needed — CakeWallet-style.
 async function autoRestartSession(session) {
   if (session.state === 'closing') return;
-  session._restartCount = (session._restartCount || 0) + 1;
-  if (session._restartCount > MAX_AUTO_RESTARTS) {
-    console.log('  Session port ' + session.port + ' exceeded max auto-restarts, marking dead');
-    session.state = 'dead';
-    return;
-  }
-  console.log('  Auto-restarting wallet-rpc on port ' + session.port + ' (attempt ' + session._restartCount + ')');
-  session.state = 'restarting';
-
-  // Kill old process if still around
-  try { session.process.kill('SIGKILL'); } catch (_) {}
-
-  await new Promise(ok => setTimeout(ok, 500));
-
-  const env = Object.assign({}, process.env, {
-    MONEROUSD_ENABLE_FCMP: '1',
-    MONEROUSD_ALLOW_LOW_MIXIN: '1',
-    MONEROUSD_DISABLE_TX_LIMITS: '1',
-  });
-
-  const args = [
-    '--rpc-bind-ip', '127.0.0.1',
-    '--rpc-bind-port', String(session.port),
-    '--disable-rpc-login',
-    '--wallet-dir', session.walletDir,
-    '--daemon-address', DAEMON_ADDRESS,
-    '--trusted-daemon',
-    '--log-file', path.join(session.walletDir, 'wallet-rpc.log'),
-    '--log-level', '0',
-    '--max-concurrency', '8',
-    '--non-interactive',
-  ];
-
-  const proc = spawn(WALLET_RPC_BIN, args, {
-    env,
-    stdio: ['ignore', 'pipe', 'pipe'],
-    detached: false,
-  });
-
-  session.process = proc;
-  proc.stderr.on('data', () => {});
-  proc.stdout.on('data', () => {});
-
-  proc.on('exit', (code) => {
-    if (session.state !== 'closing') {
-      console.log('  Session wallet-rpc exited unexpectedly (port ' + session.port + ', code ' + code + ') — will auto-restart');
-      session.state = 'dead';
-      autoRestartSession(session);
-    }
-  });
-  proc.on('error', (err) => {
-    console.log('  Session wallet-rpc spawn error: ' + err.message + ' — will auto-restart');
-    session.state = 'dead';
-    autoRestartSession(session);
-  });
-
-  const ready = await waitForWalletRpc(session.port, 10);
-  if (ready) {
-    session.state = 'ready';
-    // Reset restart counter after stability window
-    setTimeout(() => { session._restartCount = 0; }, AUTO_RESTART_WINDOW_MS);
-    // Auto-reopen wallet if one was previously loaded (fire-and-forget — open_wallet blocks during scan)
-    if (session.walletFilename) {
-      session.state = 'reopening';
-      console.log('  Session auto-restarted on port ' + session.port + ', reopening wallet "' + session.walletFilename + '"...');
-      // Run asynchronously so we don't block the event loop
-      (async () => {
-        await new Promise(ok => setTimeout(ok, 1000));
-        try {
-          const openResult = await walletRpc(session.port, 'open_wallet', {
-            filename: session.walletFilename,
-            password: session.walletPassword || '',
-          }, 600000); // 10 min — open_wallet blocks during full chain scan
-          if (openResult && openResult.result) {
-            session.state = 'ready';
-            console.log('  Session auto-reopened wallet "' + session.walletFilename + '" on port ' + session.port);
-          } else {
-            session.state = 'ready'; // still usable, client can retry open
-            console.log('  Session wallet reopen returned error on port ' + session.port + ': ' + JSON.stringify(openResult && openResult.error));
-          }
-        } catch (e) {
-          session.state = 'ready'; // wallet-rpc is alive, just wallet not opened
-          console.log('  Session wallet auto-reopen timed out on port ' + session.port + ': ' + (e.message || e));
-        }
-      })();
-    } else {
-      console.log('  Session auto-restarted successfully on port ' + session.port);
-    }
-  } else {
-    // Port may be occupied by stale process — try a new port
-    console.log('  Session auto-restart failed on port ' + session.port + ', trying new port');
-    try { session.process.kill('SIGKILL'); } catch (_) {}
-    releasePort(session.port);
-    const newPort = await allocatePort();
-    if (!newPort) {
-      console.log('  No free ports available for auto-restart');
-      session.state = 'dead';
-      return;
-    }
-    session.port = newPort;
-    const retryArgs = [
-      '--rpc-bind-ip', '127.0.0.1',
-      '--rpc-bind-port', String(newPort),
-      '--disable-rpc-login',
-      '--wallet-dir', session.walletDir,
-      '--daemon-address', DAEMON_ADDRESS,
-      '--trusted-daemon',
-      '--log-file', path.join(session.walletDir, 'wallet-rpc.log'),
-      '--log-level', '0',
-      '--max-concurrency', '8',
-      '--non-interactive',
-    ];
-    const retryProc = spawn(WALLET_RPC_BIN, retryArgs, { env, stdio: ['ignore', 'pipe', 'pipe'], detached: false });
-    session.process = retryProc;
-    retryProc.stderr.on('data', () => {});
-    retryProc.stdout.on('data', () => {});
-    retryProc.on('exit', (code2) => {
-      if (session.state !== 'closing') {
-        session.state = 'dead';
-        autoRestartSession(session);
-      }
-    });
-    retryProc.on('error', () => { session.state = 'dead'; });
-    const retryReady = await waitForWalletRpc(newPort, 10);
-    if (retryReady) {
+  if (session.manager) {
+    // WalletRpcManager handles restart internally via health monitor
+    const ok = await session.manager.restart();
+    if (ok) {
       session.state = 'ready';
-      setTimeout(() => { session._restartCount = 0; }, AUTO_RESTART_WINDOW_MS);
-      // Auto-reopen wallet on new port (fire-and-forget)
-      if (session.walletFilename) {
-        session.state = 'reopening';
-        console.log('  Session restarted on new port ' + newPort + ', reopening wallet...');
-        (async () => {
-          await new Promise(ok => setTimeout(ok, 1000));
-          try {
-            const r = await walletRpc(newPort, 'open_wallet', {
-              filename: session.walletFilename,
-              password: session.walletPassword || '',
-            }, 600000);
-            session.state = 'ready';
-            if (r && r.result) console.log('  Session auto-reopened wallet on new port ' + newPort);
-          } catch (_) { session.state = 'ready'; }
-        })();
-      } else {
-        console.log('  Session auto-restarted on new port ' + newPort);
-      }
+      session.port = session.manager.port;
     } else {
-      console.log('  Session auto-restart failed on new port ' + newPort);
       session.state = 'dead';
     }
   }
@@ -553,63 +447,56 @@ async function createSession() {
     MONEROUSD_ENABLE_FCMP: '1',
     MONEROUSD_ALLOW_LOW_MIXIN: '1',
     MONEROUSD_DISABLE_TX_LIMITS: '1',
+    MONEROUSD_DISABLE_UNLOCKS: '1',
   });
 
-  const args = [
-    '--rpc-bind-ip', '127.0.0.1',
-    '--rpc-bind-port', String(port),
-    '--disable-rpc-login',
-    '--wallet-dir', walletDir,
-    '--daemon-address', DAEMON_ADDRESS,
-    '--trusted-daemon',
-    '--log-file', path.join(walletDir, 'wallet-rpc.log'),
-    '--log-level', '0',
-    '--max-concurrency', '8',
-    '--non-interactive',
-  ];
-
-  const proc = spawn(WALLET_RPC_BIN, args, {
-    env,
-    stdio: ['ignore', 'pipe', 'pipe'],
-    detached: false,
+  // CakeWallet-style WalletRpcManager per session
+  const manager = new WalletRpcManager({
+    mode: 'server',
+    walletDir,
+    daemonAddress: DAEMON_ADDRESS,
+    walletRpcBin: WALLET_RPC_BIN,
   });
+  manager._port = port;
+
+  // Wire up manager events for logging
+  manager.on('stateChange', ({ from, to }) => {
+    console.log('  Session port ' + port + ' state: ' + from + ' → ' + to);
+  });
+  manager.on('processExit', ({ code, signal, port: p }) => {
+    console.log('  Session port ' + p + ' process exited with code ' + code + ' signal ' + signal);
+  });
+  manager.on('unhealthy', () => {
+    console.log('  Session port ' + port + ' unhealthy — auto-recovering');
+  });
+  manager.on('restartFailed', () => {
+    console.log('  Session port ' + port + ' restart failed');
+  });
+
+  const ok = await manager.spawnAndConnect(walletDir, env);
 
   const session = {
     token,
     port,
-    process: proc,
+    manager,       // CakeWallet-style RPC manager
     walletDir,
     createdAt: Date.now(),
     lastActivity: Date.now(),
-    state: 'starting',
+    state: ok ? 'ready' : 'dead',
     proxyQueue: Promise.resolve(),
   };
 
-  // Handle unexpected exit — auto-restart
-  proc.on('exit', (code) => {
-    if (session.state !== 'closing') {
-      console.log('  Session wallet-rpc exited unexpectedly (port ' + port + ', code ' + code + ') — will auto-restart');
-      session.state = 'dead';
-      autoRestartSession(session);
-    }
+  // Sync session.state with manager state for backward compatibility
+  manager.on('stateChange', ({ to }) => {
+    if (to === 'error' || to === 'disconnected') session.state = 'dead';
+    else if (to === 'connecting') session.state = 'restarting';
+    else if (to === 'wallet_opening') session.state = 'reopening';
+    else session.state = 'ready';
   });
-
-  proc.on('error', (err) => {
-    console.log('  Session wallet-rpc spawn error: ' + err.message + ' — will auto-restart');
-    session.state = 'dead';
-    autoRestartSession(session);
-  });
-
-  // Capture stderr for debugging
-  proc.stderr.on('data', () => {}); // drain
-  proc.stdout.on('data', () => {}); // drain
 
   sessions.set(token, session);
 
-  // Wait for it to be ready — 10 retries with fast intervals (~3s total)
-  const ready = await waitForWalletRpc(port, 10);
-  if (ready) {
-    session.state = 'ready';
+  if (ok) {
     console.log('  Session started: port ' + port + ' (active: ' + sessions.size + ')');
   } else {
     console.log('  Session wallet-rpc failed to start on port ' + port);
@@ -636,23 +523,18 @@ async function destroySession(token) {
     }
   }
 
-  // Save wallet state before closing (so data isn't lost)
-  try {
-    await walletRpc(session.port, 'store', {}, 5000);
-  } catch (_) {}
-  // Graceful close_wallet
-  try {
-    await walletRpc(session.port, 'close_wallet', {}, 3000);
-  } catch (_) {}
-
-  // Kill process
-  try {
-    session.process.kill('SIGTERM');
-    // Force kill after 5s
-    setTimeout(() => {
-      try { session.process.kill('SIGKILL'); } catch (_) {}
-    }, 5000);
-  } catch (_) {}
+  // Graceful shutdown via WalletRpcManager (handles store, close_wallet, kill)
+  if (session.manager) {
+    await session.manager.shutdown();
+  } else {
+    // Legacy fallback
+    try { await walletRpc(session.port, 'store', {}, 5000); } catch (_) {}
+    try { await walletRpc(session.port, 'close_wallet', {}, 3000); } catch (_) {}
+    try {
+      session.process.kill('SIGTERM');
+      setTimeout(() => { try { session.process.kill('SIGKILL'); } catch (_) {} }, 5000);
+    } catch (_) {}
+  }
 
   // Release port
   releasePort(session.port);
@@ -1274,7 +1156,7 @@ const server = http.createServer(async (req, res) => {
         if (parsedBody.params.ring_size == null) {
           parsedBody.params.ring_size = 0;
         }
-        // Dandelion++: create tx without relaying so we control propagation timing
+        // Dandelion++: create tx without relaying so we control propagation
         parsedBody.params.do_not_relay = true;
         parsedBody.params.get_tx_hex = true;
         body = JSON.stringify(parsedBody);
@@ -1284,6 +1166,14 @@ const server = http.createServer(async (req, res) => {
       if (method && !ALLOWED_RPC_METHODS.has(method)) {
         logSecurity('rpc_method_blocked', { ip: clientIp, method });
         return sendJson(res, 403, { error: { message: 'Method not allowed' } });
+      }
+
+      // Prevent set_daemon with empty address (crashes wallet-rpc binary)
+      if (method === 'set_daemon' && parsedBody.params) {
+        const addr = (parsedBody.params.address || '').trim();
+        if (!addr) {
+          return sendJson(res, 200, { jsonrpc: '2.0', id: parsedBody.id || '0', result: { status: 'ok' } });
+        }
       }
 
       // CSRF enforcement for fund-moving method
@@ -1324,109 +1214,80 @@ const server = http.createServer(async (req, res) => {
         // If no credential registered, allow through (biometric is optional until registered)
       }
 
-      const PROXY_TIMEOUT_MS = method === 'refresh' ? 600000
+      // CakeWallet-style: route through WalletRpcManager
+      // The manager handles queuing, state validation, health checks,
+      // auto-restart, daemon connection, and FCMP++ ring_size injection.
+      const timeoutMs = method === 'refresh' ? 600000
         : method === 'rescan_blockchain' ? 300000
         : method === 'restore_deterministic_wallet' ? 600000
+        : method === 'transfer' ? 180000  // FCMP++ proof construction can take 30-120s
+        : method === 'get_transfers' ? 180000  // Large wallets with many mining payouts
+        : method === 'create_wallet' ? 60000   // Includes key generation; relay clients need headroom
+        : method === 'open_wallet' ? 60000
         : method === 'set_daemon' ? 10000
         : 90000;
 
-      const opts = {
-        hostname: '127.0.0.1',
-        port: session.port,
-        path: '/json_rpc',
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
-      };
+      const doRpc = async () => {
+        try {
+          const params = (parsedBody.params || {});
+          const result = await session.manager.rpc(method, params, { timeoutMs });
 
-      let responded = false;
-      function send502(msg) {
-        if (responded) return;
-        responded = true;
-        res.writeHead(502, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: { message: msg } }));
-      }
+          // Track wallet filename for session persistence (no passwords stored)
+          if (method === 'restore_deterministic_wallet' || method === 'open_wallet' || method === 'create_wallet') {
+            if (params.filename) {
+              session.walletFilename = params.filename;
+              // SECURITY: Do NOT store wallet password in session
+            }
+          }
 
-      const doProxy = () =>
-        new Promise((resolve) => {
-          const proxy = http.request(opts, (rpcRes) => {
-            let buf = '';
-            rpcRes.on('error', () => {
-              if (!responded) send502('Wallet RPC connection error.');
-              resolve();
-            });
-            rpcRes.on('data', (chunk) => (buf += chunk));
-            rpcRes.on('end', async () => {
-              if (responded) { resolve(); return; }
-              responded = true;
+          // Dandelion++: route tx then strip tx_hex from response
+          if (method === 'transfer' && result && result.tx_hex && result.tx_hash) {
+            const txHex = result.tx_hex;
+            const txHash = result.tx_hash;
+            delete result.tx_hex;
+            dandelionRoute(txHex, txHash).catch(err =>
+              logSecurity('dandelion_route_error', { msg: err.message })
+            );
+          }
+
+          // Coinbase unlock window: flag mining payouts within 10 blocks
+          if (method === 'get_transfers' && result) {
+            await enforceCoinbaseLock(result).catch(() => {});
+          }
+
+          const responseData = { jsonrpc: '2.0', id: parsedBody.id || '0', result };
+          const headers = { 'Content-Type': 'application/json' };
+          if (!parseCookie(req, 'musd_session')) {
+            headers['Set-Cookie'] = 'musd_session=' + session.token + '; Path=/; HttpOnly; SameSite=Strict; Max-Age=43200';
+          }
+          res.writeHead(200, headers);
+          res.end(JSON.stringify(responseData));
+        } catch (err) {
+          const errMsg = err.message || 'Wallet RPC error';
+          // If manager reports state error, try auto-restart
+          if (/Cannot execute.*in state/.test(errMsg) && session.manager) {
+            const restarted = await session.manager.restart().catch(() => false);
+            if (restarted) {
               try {
-                // Preserve uint64 precision
-                const raw = (buf || '')
-                  .replace(/"balance"\s*:\s*(\d+)/g, '"balance":"$1"')
-                  .replace(/"unlocked_balance"\s*:\s*(\d+)/g, '"unlocked_balance":"$1"')
-                  .replace(/"amount"\s*:\s*(\d+)/g, '"amount":"$1"');
-                const data = JSON.parse(raw);
-                // Track wallet filename for auto-reopen after crash/restart
-                if (data && data.result && !data.error) {
-                  if (method === 'restore_deterministic_wallet' || method === 'open_wallet' || method === 'create_wallet') {
-                    try {
-                      const p = JSON.parse(body);
-                      if (p.params && p.params.filename) {
-                        session.walletFilename = p.params.filename;
-                        session.walletPassword = p.params.password || '';
-                      }
-                    } catch (_) {}
-                  }
-                }
-                // Dandelion++: extract tx_hex from transfer result, route it,
-                // and strip it from the response before sending to client.
-                if (method === 'transfer' && data && data.result && !data.error) {
-                  const txHex = data.result.tx_hex;
-                  const txHash = data.result.tx_hash;
-                  if (txHex && txHash) {
-                    delete data.result.tx_hex;
-                    dandelionRoute(txHex, txHash).catch(err =>
-                      logSecurity('dandelion_route_error', { msg: err.message })
-                    );
-                  }
-                }
-                // Coinbase unlock window: flag coinbase txns within 10 blocks
-                if (method === 'get_transfers' && data && data.result && !data.error) {
-                  await enforceCoinbaseLock(data.result).catch(() => {});
-                }
-                // Ensure session cookie is set on RPC responses too
-                const headers = { 'Content-Type': 'application/json' };
-                if (!parseCookie(req, 'musd_session')) {
-                  headers['Set-Cookie'] = 'musd_session=' + session.token + '; Path=/; HttpOnly; SameSite=Strict; Max-Age=43200';
-                }
-                res.writeHead(rpcRes.statusCode, headers);
-                res.end(JSON.stringify(data));
-              } catch (_) {
-                res.writeHead(rpcRes.statusCode, { 'Content-Type': 'application/json' });
-                res.end(buf);
-              }
-              resolve();
-            });
-          });
-          proxy.setTimeout(PROXY_TIMEOUT_MS, () => {
-            proxy.destroy();
-            send502(method === 'refresh'
-              ? 'Sync is taking longer than ' + (PROXY_TIMEOUT_MS / 60000) + ' minutes. Try again later.'
-              : 'Wallet RPC timed out. Please refresh the page.');
-            resolve();
-          });
-          proxy.on('error', () => {
-            send502('Wallet RPC error. Please refresh the page to start a new session.');
-            resolve();
-          });
-          proxy.write(body);
-          proxy.end();
-        });
+                const params = (parsedBody.params || {});
+                const retryResult = await session.manager.rpc(method, params, { timeoutMs });
+                const responseData = { jsonrpc: '2.0', id: parsedBody.id || '0', result: retryResult };
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify(responseData));
+                return;
+              } catch (_) {}
+            }
+          }
+          res.writeHead(502, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: { message: errMsg } }));
+        }
+      };
 
       // Serialize mutating requests per-session; read-only run concurrently
       if (CONCURRENT_RPC_METHODS.has(method)) {
-        doProxy();
+        doRpc();
       } else {
-        session.proxyQueue = session.proxyQueue.then(doProxy);
+        session.proxyQueue = session.proxyQueue.then(doRpc);
       }
     });
     return;
@@ -1496,6 +1357,20 @@ const server = http.createServer(async (req, res) => {
       body += chunk;
     });
     req.on('end', () => {
+      // Enforce node owner's MINER_ADDRESS for /start_mining — mining rewards
+      // must only go to the node operator's wallet, never to arbitrary addresses.
+      if (miningPath === '/start_mining') {
+        if (!MINER_ADDRESS) {
+          return sendJson(res, 400, { error: 'MINER_ADDRESS not configured. Set it via environment variable when starting your node.' });
+        }
+        try {
+          const parsed = body ? JSON.parse(body) : {};
+          parsed.miner_address = MINER_ADDRESS;
+          body = JSON.stringify(parsed);
+        } catch (_) {
+          body = JSON.stringify({ miner_address: MINER_ADDRESS, threads_count: 1, do_background_mining: true, ignore_battery: true });
+        }
+      }
       const dParsed = parseTarget(DAEMON_RPC) || { hostname: '127.0.0.1', port: '17750', protocol: 'http:' };
       const opts = {
         hostname: dParsed.hostname,
@@ -1525,7 +1400,21 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // --- Dandelion++ stem endpoint (receives stem transactions from peer relays) ---
+  // --- Protocol health ---
+
+  if (req.method === 'GET' && req.url === '/api/protocol-health') {
+    const ratio = await fetchReserveRatio().catch(() => null);
+    sendJson(res, 200, {
+      reserve_ratio: ratio !== null ? Math.round(ratio * 10000) / 100 : null,
+      reserve_ratio_pct: ratio !== null ? (ratio * 100).toFixed(2) + '%' : 'unknown',
+      min_required_pct: (RESERVE_MIN_RATIO * 100).toFixed(0) + '%',
+      mining_active: ratio === null || ratio >= RESERVE_MIN_RATIO,
+      status: ratio === null ? 'unknown' : ratio >= RESERVE_MIN_RATIO ? 'healthy' : 'undercollateralized',
+    });
+    return;
+  }
+
+  // --- Dandelion++ stem endpoint ---
 
   if (req.method === 'POST' && req.url === '/api/dandelion/stem') {
     if (DANDELION_RELAY_PEERS.length === 0) {
@@ -1622,6 +1511,10 @@ server.listen(PORT, HOST, () => {
   console.log('');
   // Ensure session dir exists
   fs.mkdirSync(SESSION_DIR_BASE, { recursive: true, mode: 0o700 });
+  // NOTE: Stale wallet-rpc cleanup is handled by the IIFE at module load time
+  // (cleanupStaleWalletRpc). A second cleanup here caused a race condition:
+  // incoming requests could create sessions (spawning wallet-rpc processes)
+  // before this callback ran, and this cleanup would SIGKILL those new processes.
   startMempoolMiner();
 });
 
@@ -1649,7 +1542,10 @@ function daemonRpc(method, params) {
   });
 }
 
-const MINER_ADDRESS = process.env.MINER_ADDRESS || 'Moz5T2Abptdgu8AoXTkjNibmu5cnLtDYS29tmCUnYamd99oizcM9uLJFniiGiZUzAq3ZSyYyc1ZqkeTWCcR7A3YJR5tkrwS';
+// Mining rewards are restricted to the node owner's wallet address.
+// Set MINER_ADDRESS via environment variable when starting your node.
+// If not set, mining reward payouts will fail (no default address leaked).
+const MINER_ADDRESS = process.env.MINER_ADDRESS || '';
 
 function daemonRest(urlPath, body) {
   return new Promise((resolve, reject) => {
@@ -1674,16 +1570,13 @@ function daemonRest(urlPath, body) {
 
 // ===== Dandelion++ helpers =====
 
-// Submit a raw transaction directly to the daemon (fluff phase)
 function daemonSendRaw(txHex) {
   return new Promise((resolve, reject) => {
     const dParsed = parseTarget(DAEMON_RPC) || { hostname: '127.0.0.1', port: '17750' };
     const body = JSON.stringify({ tx_as_hex: txHex, do_not_relay: false });
     const opts = {
-      hostname: dParsed.hostname,
-      port: parseInt(dParsed.port, 10),
-      path: '/send_raw_transaction',
-      method: 'POST',
+      hostname: dParsed.hostname, port: parseInt(dParsed.port, 10),
+      path: '/send_raw_transaction', method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
     };
     const req = http.request(opts, (r) => {
@@ -1698,7 +1591,6 @@ function daemonSendRaw(txHex) {
   });
 }
 
-// Forward a transaction to a peer relay's stem endpoint
 function stemForwardToPeer(peer, txHex) {
   return new Promise((resolve, reject) => {
     let u;
@@ -1709,10 +1601,8 @@ function stemForwardToPeer(peer, txHex) {
     const mod = isHttps ? require('https') : http;
     const body = JSON.stringify({ tx_as_hex: txHex });
     const opts = {
-      hostname: u.hostname,
-      port: u.port || (isHttps ? 443 : 80),
-      path: u.pathname,
-      method: 'POST',
+      hostname: u.hostname, port: u.port || (isHttps ? 443 : 80),
+      path: u.pathname, method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
     };
     const req = mod.request(opts, (r) => {
@@ -1730,12 +1620,9 @@ function stemForwardToPeer(peer, txHex) {
   });
 }
 
-// Route a transaction via Dandelion++ (stem or fluff)
 async function dandelionRoute(txHex, txHash) {
   if (DANDELION_RELAY_PEERS.length > 0 && Math.random() < DANDELION_STEM_PROB) {
-    // Stem phase: forward to one random peer
     const peer = DANDELION_RELAY_PEERS[Math.floor(Math.random() * DANDELION_RELAY_PEERS.length)];
-    // Failsafe timeout: if stem doesn't propagate, broadcast ourselves
     const timeoutMs = 30000 + Math.random() * 30000;
     const handle = setTimeout(async () => {
       if (dandelionPool.has(txHash)) {
@@ -1747,16 +1634,13 @@ async function dandelionRoute(txHex, txHash) {
     dandelionPool.set(txHash, { txHex, handle });
     try {
       await stemForwardToPeer(peer, txHex);
-      // Peer accepted — failsafe timer covers the rest
     } catch (e) {
-      // Peer rejected or unreachable — fluff immediately as fallback
       clearTimeout(handle);
       dandelionPool.delete(txHash);
       logSecurity('dandelion_stem_fallback', { peer, tx: txHash.slice(0, 8) });
       await daemonSendRaw(txHex);
     }
   } else {
-    // Fluff phase: broadcast to daemon directly
     await daemonSendRaw(txHex);
   }
 }
@@ -1765,20 +1649,17 @@ async function dandelionRoute(txHex, txHash) {
 
 async function getChainHeight() {
   const now = Date.now();
-  if (cachedChainHeight > 0 && now - chainHeightFetchedAt < 30000) {
-    return cachedChainHeight;
-  }
+  if (cachedChainHeight > 0 && now - chainHeightFetchedAt < 30000) return cachedChainHeight;
   try {
     const r = await daemonRpc('get_block_count', {});
     if (r && r.result && r.result.count > 0) {
-      cachedChainHeight = r.result.count - 1; // count = height + 1
+      cachedChainHeight = r.result.count - 1;
       chainHeightFetchedAt = now;
     }
   } catch (_) {}
   return cachedChainHeight;
 }
 
-// Mark coinbase transactions within the 10-block lock window
 async function enforceCoinbaseLock(result) {
   const currentHeight = await getChainHeight();
   if (!currentHeight) return;
@@ -1808,6 +1689,12 @@ async function checkMempoolAndMine() {
     const poolCheck = await daemonRest('/get_transaction_pool');
     const txCount = (poolCheck && poolCheck.transactions && poolCheck.transactions.length) || 0;
     if (txCount === 0) return;
+
+    const ratio = await fetchReserveRatio();
+    if (ratio !== null && ratio < RESERVE_MIN_RATIO) {
+      console.log(`  Auto-mine: reserve ratio ${(ratio * 100).toFixed(1)}% — halted until reserve reaches ${(RESERVE_MIN_RATIO * 100).toFixed(0)}%`);
+      return;
+    }
 
     miningInProgress = true;
     console.log('  Auto-mine: ' + txCount + ' tx(s) in mempool, mining…');

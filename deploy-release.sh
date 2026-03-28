@@ -14,6 +14,37 @@ UPDATE_DIR="/var/www/monerousd-updates"
 RELAY_KEY="${RELAY_SSH_KEY:-~/.ssh/relay_key}"
 RELAY_HOST="${RELAY_SSH_HOST:-user@your-relay-server}"
 
+# ─── macOS DMG build on Linux (geniso method) ────────────────────────────────
+#
+# electron-builder --mac produces .zip archives on Linux (no DMG).
+# To generate a proper .dmg for the download page, use genisoimage + dmg2img:
+#
+#   Step 1 — Unzip the mac app bundle produced by electron-builder:
+#     unzip -q "dist/Monero USD Wallet-$VERSION-mac-x64.zip" -d /tmp/mac-x64/
+#     unzip -q "dist/Monero USD Wallet-$VERSION-mac-arm64.zip" -d /tmp/mac-arm64/
+#
+#   Step 2 — Create a HFS-compatible ISO from the .app using genisoimage:
+#     genisoimage -V "Monero USD Wallet" -D -R -apple -no-pad \
+#       -o "/tmp/MoneroUSD-$VERSION-mac-x64.iso" /tmp/mac-x64/
+#     genisoimage -V "Monero USD Wallet" -D -R -apple -no-pad \
+#       -o "/tmp/MoneroUSD-$VERSION-mac-arm64.iso" /tmp/mac-arm64/
+#
+#   Step 3 — Convert ISO to DMG (Linux: use dmg2img in reverse / Python dmgbuild):
+#     # Option A — rename (works for basic distribution, not HFS+):
+#     cp "/tmp/MoneroUSD-$VERSION-mac-x64.iso" "$DIST_DIR/Monero USD Wallet-$VERSION-x64.dmg"
+#
+#     # Option B — proper HFS+ DMG via dd + mkfs.hfsplus + hdiutil (macOS only):
+#     hdiutil create -volname "Monero USD Wallet" -srcfolder /tmp/mac-x64/ \
+#       -ov -format UDZO -o "$DIST_DIR/Monero USD Wallet-$VERSION-x64.dmg"
+#
+#     # Option C — dmgbuild (pip install dmgbuild, macOS or Linux with hfsprogs):
+#     dmgbuild -s dmgbuild-settings.py "Monero USD Wallet" \
+#       "$DIST_DIR/Monero USD Wallet-$VERSION-x64.dmg"
+#
+# OTA updates on macOS use the .zip file (not .dmg) — the .dmg is for first install only.
+# Required tools: genisoimage (apt install genisoimage), unzip
+# ─────────────────────────────────────────────────────────────────────────────
+
 # Read version from latest.yml
 VERSION=$(grep '^version:' "$DIST_DIR/latest.yml" | awk '{print $2}')
 if [ -z "$VERSION" ]; then

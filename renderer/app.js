@@ -5440,7 +5440,7 @@ window.addEventListener('unhandledrejection', function(e) {
                 restore_height: userHeight,
                 language: language,
                 autosave_current: true,
-              }, { timeoutMs: 30000 });
+              }, { timeoutMs: 120000 });
               restoredFresh = true;
             } catch (retryErr) {
               // If re-restore also fails with "already exists", just open it
@@ -6036,7 +6036,7 @@ window.addEventListener('unhandledrejection', function(e) {
                   restore_height: userRestoreHeight,
                   language: 'English',
                   autosave_current: false,
-                }, { timeoutMs: 30000 });
+                }, { timeoutMs: 120000 });
                 restoredFresh = true;
               } catch (retryErr) {
                 const retryMsg = String((retryErr && retryErr.message) || '');
